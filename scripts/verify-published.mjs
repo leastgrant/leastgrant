@@ -54,8 +54,31 @@ function registryBase() {
   return url.replace(/\/+$/, '');
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ask npm whether the published version carries a verified attestation.
+ *
+ * Retried for the same reason the manifest fetch is: the attestation is
+ * published alongside the tarball but becomes queryable a moment later, so
+ * asking immediately can report "no provenance" for a package that has it.
+ * Only the absence is retried — a verified attestation is final.
+ */
+async function checkProvenanceWithRetry(spec, advisory, deadlineMs = 90_000) {
+  const startedAt = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    const result = checkProvenance(spec, advisory, /* quiet */ Date.now() - startedAt < deadlineMs);
+    if (result === 0) return 0;
+    if (advisory) return result;
+    if (Date.now() - startedAt >= deadlineMs) return result;
+    const wait = Math.min(3000 * 2 ** attempt, 15_000);
+    console.log(`  no attestation yet; retrying in ${wait / 1000}s`);
+    await sleep(wait);
+  }
+}
+
 /** Ask npm whether the published version carries a verified attestation. */
-function checkProvenance(spec, advisory) {
+function checkProvenance(spec, advisory, quiet = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-attest-'));
   try {
     const init = npm(['init', '-y'], { cwd: dir });
@@ -70,13 +93,17 @@ function checkProvenance(spec, advisory) {
     }
     const audit = npm(['audit', 'signatures'], { cwd: dir });
     const out = `${audit.stdout || ''}${audit.stderr || ''}`;
-    console.log(
-      out
-        .split('\n')
-        .filter((l) => l.trim())
-        .map((l) => `  | ${l}`)
-        .join('\n'),
-    );
+    // While retrying, only the attempt that succeeds is worth printing; the
+    // others are the same three lines saying "not yet".
+    if (!quiet || /verified attestation/i.test(out)) {
+      console.log(
+        out
+          .split('\n')
+          .filter((l) => l.trim())
+          .map((l) => `  | ${l}`)
+          .join('\n'),
+      );
+    }
     if (/verified attestation/i.test(out)) {
       console.log('  ok    provenance attestation verified');
       return 0;
@@ -126,16 +153,43 @@ async function main() {
   // A scoped name carries a slash, which must be escaped in the path segment.
   const url = `${registry}/${name.split('/').join('%2f')}/${encodeURIComponent(version)}`;
 
+  // A publish is not instantly visible.
+  //
+  // The registry accepts the upload and then takes a moment to make the version
+  // manifest readable, so a proof that runs the instant `npm publish` returns
+  // can ask for a version that is not there yet and conclude the release
+  // failed. That is what happened on v0.2.0: the package was published
+  // correctly, byte-identical and with provenance, and the run went red anyway.
+  //
+  // Waiting is only correct in one direction. When the answer is "not there",
+  // it might be propagation, so retry. When the answer is "here it is", it is
+  // final. And `--exists`, which runs *before* publishing to decide whether to
+  // publish at all, must not wait: there a 404 is the expected answer and
+  // retrying would just make every release slower.
+  const deadline = existsOnly ? 0 : 90_000;
   let status;
   let body;
-  try {
-    const res = await fetch(url, { headers: { accept: 'application/json' } });
-    status = res.status;
-    // Consumed even when unused, so undici releases the socket.
-    body = await res.text();
-  } catch (e) {
-    err(`could not reach ${registry}: ${e.message}`);
-    return 2;
+  const startedAt = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { accept: 'application/json' } });
+      status = res.status;
+      // Consumed even when unused, so undici releases the socket.
+      body = await res.text();
+    } catch (e) {
+      if (Date.now() - startedAt >= deadline) {
+        err(`could not reach ${registry}: ${e.message}`);
+        return 2;
+      }
+      status = 0;
+      body = '';
+    }
+
+    if (status === 200) break;
+    if (Date.now() - startedAt >= deadline) break;
+    const wait = Math.min(2000 * 2 ** attempt, 15_000);
+    console.log(`  ${spec} not visible yet (HTTP ${status}); retrying in ${wait / 1000}s`);
+    await sleep(wait);
   }
 
   if (existsOnly) {
@@ -198,7 +252,7 @@ async function main() {
   // --- provenance ---------------------------------------------------------------
 
   if (expectProvenance || advisoryProvenance) {
-    problems += checkProvenance(spec, advisoryProvenance);
+    problems += await checkProvenanceWithRetry(spec, advisoryProvenance);
   }
 
   if (problems) {
