@@ -111,7 +111,7 @@ if (r.status !== 0 && process.env['GITHUB_ACTIONS']) {
   }
 }
 
-// , not . Calling  straight after
+// Set the exit code rather than calling process.exit(). Calling it straight after
 // writing megabytes to stdout truncates whatever has not flushed yet — on a
 // pipe those writes are asynchronous — which silently swallowed the test
 // output and the annotations above, and made a red CI build report nothing
