@@ -29,6 +29,7 @@ const CTX = { roots: [WS], secretPatterns: [] };
 /** Forward slashes, so a path never tokenizes as an escape sequence. */
 const posix = (p: string): string => p.split(path.sep).join('/');
 const config: Config = { ...DEFAULT_CONFIG, thresholds: { ...DEFAULT_THRESHOLDS }, rules: [] };
+const WIN_PLATFORM = process.platform === 'win32';
 
 /** An envelope saturated with approvals for each of `commands`. */
 function trainedOn(commands: string[]) {
@@ -242,7 +243,13 @@ describe('an unrecognised tool is not a harmless one', () => {
   });
 });
 
-describe('Windows device namespaces do not degrade to a relative path', () => {
+// Windows only, and not by omission: a backslash is an ordinary filename
+// character on POSIX, so a device-looking string there is not a device path
+// at all — it is one relative filename that happens to contain backslashes,
+// resolving inside the project and entirely harmless. Asserting the Windows
+// behaviour unconditionally is how this suite went red on every Linux and
+// macOS runner while passing on the machine it was written on.
+describe('Windows device namespaces do not degrade to a relative path', { skip: !WIN_PLATFORM }, () => {
   // Stripping `\\?\` left `GLOBALROOT\Device\...`, which then resolved against
   // the project directory and read as contained.
   for (const p of ['\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\secret.txt', '\\\\.\\Volume{1}\\x', '\\\\.\\pipe\\x']) {
@@ -256,6 +263,16 @@ describe('Windows device namespaces do not degrade to a relative path', () => {
   test('but the ordinary extended-length forms still resolve', () => {
     assert.equal(canonicalize('\\\\?\\C:\\Windows\\x', WS).unknown, false);
     assert.equal(canonicalize('\\\\?\\UNC\\srv\\share\\x', WS).unknown, false);
+  });
+});
+
+describe('off Windows a backslash is just a character in a name', { skip: WIN_PLATFORM }, () => {
+  test('a device-looking string is an ordinary file inside the project', () => {
+    // Stated rather than left as a skipped Windows test, so the platform
+    // difference is a decision a reader can see instead of a gap.
+    const name = String.fromCharCode(92).repeat(2) + '?' + String.fromCharCode(92) + 'GLOBALROOT' + String.fromCharCode(92) + 'x.txt';
+    const c = canonicalize(name, WS);
+    assert.equal(c.unknown, false);
   });
 });
 
