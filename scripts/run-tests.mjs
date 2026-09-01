@@ -24,12 +24,19 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = path.join(ROOT, 'dist', 'test');
 
+/** Print an error so it shows up as an annotation on the run page in CI. */
+const annotate = (msg) => {
+  const flat = String(msg).split(String.fromCharCode(10)).join(' | ').slice(0, 900);
+  if (process.env['GITHUB_ACTIONS']) console.log('::error title=test failure::' + flat);
+  else console.error(msg);
+};
+
 const args = process.argv.slice(2);
 const dot = args.includes('--dot');
 const filters = args.filter((a) => !a.startsWith('--'));
 
 if (!fs.existsSync(DIR)) {
-  console.error(`no compiled tests at ${DIR} — run "npm run build" first`);
+  annotate(`no compiled tests at ${DIR} — run "npm run build" first`);
   process.exit(1);
 }
 
@@ -49,7 +56,7 @@ if (filters.length) {
 }
 
 if (!files.length) {
-  console.error(
+  annotate(
     filters.length
       ? `no test files matched ${filters.join(', ')}`
       : `no test files found under ${DIR}`,
@@ -95,7 +102,12 @@ if (r.status !== 0 && process.env['GITHUB_ACTIONS']) {
   if (reported.length) {
     for (const line of reported) console.log(`::error title=test failure::${line}`);
   } else {
-    console.log('::error title=test failure::the run failed but no failing test was parsed from the output');
+    // Nothing matched the expected shape — a crash at import, a runner error,
+    // an out-of-memory. The tail of the output is the only useful thing left,
+    // and it must reach somewhere readable without repository admin.
+    const tail = lines.filter((l) => l.trim()).slice(-12);
+    annotate('the run failed with no parseable test failure; last lines follow');
+    for (const l of tail) annotate(l);
   }
 }
 
