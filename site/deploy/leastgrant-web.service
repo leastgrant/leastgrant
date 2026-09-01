@@ -1,0 +1,94 @@
+# The origin server for leastgrant.xyz.
+#
+#   sudo cp site/deploy/leastgrant-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now leastgrant-web
+#
+# This process serves static files on loopback only. Cloudflare Tunnel connects
+# to it from the same host; nothing else can reach it, and no inbound port is
+# opened.
+#
+# There is no secret in this file. The Cloudflare Tunnel token belongs to the
+# `cloudflared` service, not to this one, and must never appear here or anywhere
+# else in the repository.
+
+[Unit]
+Description=leastgrant.xyz static origin
+Documentation=https://github.com/leastgrant/leastgrant/blob/main/site/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# A dedicated account with no login shell and no home directory worth having.
+# Created by DEPLOY.md; the web root is owned by the deploy user and only read
+# by this one.
+User=leastgrant
+Group=leastgrant
+
+# --root points at a symlink. Deploys swap where that symlink points, which the
+# server picks up on the next request, so a content update needs no restart of
+# this unit and no restart of cloudflared.
+#
+# /usr/local/bin/node rather than /usr/bin/node: DEPLOY.md installs Node from
+# the official tarball into /opt and symlinks it there, because adding a
+# third-party apt repository to the machine that serves a security tool's
+# website is a trust decision with no upside. An apt-installed Node lands in
+# /usr/bin instead; change this line if that is what the origin has.
+ExecStart=/usr/local/bin/node /srv/leastgrant/serve.mjs --root /srv/leastgrant/current --port 8787 --host 127.0.0.1
+
+Restart=on-failure
+RestartSec=2s
+
+# --- hardening ---------------------------------------------------------------
+#
+# This process reads eight hundred kilobytes of static files and writes nothing.
+# Everything below removes a capability it has no use for, so that a bug in it
+# -- or in Node -- has as little to work with as possible. `systemd-analyze
+# security leastgrant-web` scores the result.
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RemoveIPC=yes
+UMask=0077
+
+# The web root is mounted read-only into the unit's view of the filesystem.
+# A server that cannot write to what it serves cannot be made to deface it.
+ReadOnlyPaths=/srv/leastgrant
+
+# It listens on loopback and talks to nobody. No AF_UNIX, no AF_NETLINK.
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+# Reading files and answering sockets needs none of these.
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @swap @reboot @debug
+SystemCallArchitectures=native
+
+# Node's default heap on a small VPS is generous; this is a static file server.
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

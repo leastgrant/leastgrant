@@ -15,3 +15,9 @@ coverage/
 
 # Local `npm pack` output. Never commit a build artifact.
 *.tgz
+
+# Website scratch. The capture sandbox is a throwaway home directory the site
+# build creates to run the real CLI in; the rest are design-iteration renders.
+site/.capture/
+site/.logo-*
+site/.brand-preview.*

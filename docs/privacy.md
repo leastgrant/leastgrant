@@ -56,7 +56,7 @@ only by the hook, and only when `telemetry.ledger` is true.
 A real line looks like this:
 
 ```json
-{"v":1,"at":1788172475478,"agent":"claude-code","sessionId":"s1","project":"d:\\tmp",
+{"v":1,"at":1788172475478,"agent":"claude-code","sessionId":"s1","project":"/home/you/project",
  "tool":"Bash","display":"mysql --password=«redacted:flag-value» -e \"select 1\"",
  "signature":"mysql <sql:select> --password=«redacted:flag-value» -e","capability":"exec.db",
  "blast":{"reach":"external","reversibility":"trivial","exposure":"reads-secrets","scale":"single"},
@@ -92,7 +92,7 @@ The record of what was refused. One line per refused signature, written by `reco
 `src/store/index.ts`:
 
 ```json
-{"v":1,"scope":"project","key":"d:\\tmp","signature":"git push origin main --force","at":1788169471290}
+{"v":1,"scope":"project","key":"/home/you/project","signature":"git push origin main --force","at":1788169471290}
 ```
 
 Three things about it are worth stating plainly.
@@ -151,7 +151,7 @@ named after the session id.
   "capability":"exec.db","blast":{"reach":"external","reversibility":"trivial",
   "exposure":"reads-secrets","scale":"single"},"decision":"ask",
   "display":"mysql --password=«redacted:flag-value» -e \"select 1\"","toolUseId":"toolu_01",
-  "at":1788172475478,"attended":true,"project":"d:\\tmp"}}}
+  "at":1788172475478,"attended":true,"project":"/home/you/project"}}}
 ```
 
 **`pendingById` means signatures land here too**, not only in the ledger, the envelope and

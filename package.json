@@ -36,7 +36,10 @@
     "test:fast": "node scripts/run-tests.mjs --dot",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build && npm test",
-    "release:check": "node scripts/release-rehearsal.mjs"
+    "release:check": "node scripts/release-rehearsal.mjs",
+    "site:build": "npm run build && node site/build.mjs",
+    "site:serve": "node site/serve.mjs",
+    "site:test": "npm run site:build && node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/server.test.mjs"
   },
   "keywords": [
     "ai-agent",

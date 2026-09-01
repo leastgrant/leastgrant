@@ -1,0 +1,116 @@
+# The website.
+#
+# Deliberately a separate workflow from `ci.yml` and `release.yml`.
+#
+# The package and the website have different failure consequences and must not
+# gate each other. A broken stylesheet should never stop a security fix reaching
+# npm, and a flaky website check should never make a release look unsafe. The
+# release pipeline verifies the tarball; this verifies the pages. They share a
+# repository and nothing else.
+#
+# It runs on every change to the site *or to the Markdown the site renders*,
+# because the docs pages are views of those files: an edit to THREAT-MODEL.md
+# changes the built site, and the assertions here are what catch it if that
+# edit breaks a link or drops a claim the site quotes.
+name: Site
+
+# The two path lists are duplicated rather than shared through a YAML anchor.
+# Actions does not support anchors in workflow files, and a workflow that fails
+# to parse does not run at all -- which for a check is the worst failure mode,
+# because it looks exactly like passing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'THREAT-MODEL.md'
+      - 'SECURITY.md'
+      - 'CONTRIBUTING.md'
+      - 'RELEASING.md'
+      - 'package.json'
+      - '.github/workflows/site.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'THREAT-MODEL.md'
+      - 'SECURITY.md'
+      - 'CONTRIBUTING.md'
+      - 'RELEASING.md'
+      - 'package.json'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The site build shells out to the real CLI to capture every verdict it
+      # displays, so the package has to be built first. `site:build` does that.
+      - name: Build the site
+        run: npm run site:build
+
+      # Markdown renderer against hostile payloads, assertions over the built
+      # artifact, and the origin server's real HTTP responses.
+      - name: Verify
+        run: node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/server.test.mjs
+
+      # A second build from the same source must produce the same bytes. If it
+      # does not, something in the build is reading the clock, the filesystem
+      # order, or the machine -- and a site that differs run to run cannot be
+      # checked by comparing it to what was deployed.
+      - name: The build is reproducible
+        run: |
+          find site/dist -type f -not -name '*.br' -not -name '*.gz' \
+            | sort | xargs sha256sum > "$RUNNER_TEMP/first.txt"
+          npm run site:build > /dev/null
+          find site/dist -type f -not -name '*.br' -not -name '*.gz' \
+            | sort | xargs sha256sum > "$RUNNER_TEMP/second.txt"
+          if ! diff -u "$RUNNER_TEMP/first.txt" "$RUNNER_TEMP/second.txt"; then
+            echo "::error::the site build is not reproducible"
+            exit 1
+          fi
+          echo "identical across two builds"
+
+      - name: Summarise
+        run: |
+          {
+            echo '### Site'
+            echo ''
+            echo "| | |"
+            echo "|---|---|"
+            echo "| pages | $(find site/dist -name '*.html' | wc -l) |"
+            echo "| total | $(du -sh site/dist | cut -f1) |"
+            echo "| largest page | $(find site/dist -name '*.html' -printf '%s %p\n' | sort -rn | head -1 | awk '{printf "%.0f KB", $1/1024}') |"
+            echo "| third-party requests | 0 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site
+          path: site/dist
+          if-no-files-found: error
+          retention-days: 14
