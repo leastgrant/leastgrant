@@ -1,0 +1,27 @@
+# Line endings are a packaging concern here, not a style preference.
+#
+# `bin/leastgrant.js` starts with `#!/usr/bin/env node`. If that line ends CRLF,
+# the kernel looks for an interpreter called `node\r` and the CLI fails to start
+# on Linux and macOS with a message that names a program nobody has heard of.
+#
+# Git on Windows defaults to `core.autocrlf=true`, so without this file a fresh
+# clone on a Windows machine gets CRLF in the working tree, and `npm pack` packs
+# exactly what is in the working tree. A release cut from Windows would ship a
+# broken executable.
+#
+# It also matters for the release pipeline's central claim. That pipeline proves
+# "what was published is what was verified" by comparing the sha512 of the
+# tarball it built against the registry's `dist.integrity`. Two machines can
+# only produce the same bytes if they agree about line endings.
+#
+# `eol=lf` rather than plain `text=auto`: the latter normalises what goes *into*
+# git but still hands Windows a CRLF working tree.
+* text=auto eol=lf
+
+# Things that must never be touched.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.tgz binary
+*.gz binary

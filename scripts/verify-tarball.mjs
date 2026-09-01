@@ -273,6 +273,44 @@ for (const f of files) {
 }
 if (!secretHits) ok('no credential-shaped strings');
 
+// --- 6b. line endings, because one of them is executable ------------------------
+//
+// bin/leastgrant.js begins with a #!/usr/bin/env node shebang. If that line ends
+// CRLF, the kernel looks for an interpreter whose name ends in a carriage return
+// and the CLI does not start on Linux or macOS. npm pack packs the working tree
+// verbatim, and Git on Windows checks out CRLF by default, so a release cut from
+// a Windows clone without this repository's .gitattributes would ship a binary
+// that cannot run.
+//
+// It also decides whether two machines packing the same commit produce the same
+// bytes, which is what lets the release workflow prove that what it published is
+// what it verified.
+
+const CR = String.fromCharCode(13);
+const shebanged = files.filter((f) => !isBinary(f) && readText(f).startsWith("#!"));
+let crlf = 0;
+for (const f of shebanged) {
+  const first = readText(f).split(String.fromCharCode(10))[0];
+  if (first.endsWith(CR)) {
+    fail(f + " has a CRLF shebang, which is not executable on Linux or macOS");
+    crlf++;
+  }
+}
+if (shebanged.length && !crlf) ok(shebanged.length + " executable file(s) have a clean shebang");
+
+const withCR = files.filter(
+  (f) => /\.(js|mjs|cjs|json|ts)$/.test(f) && !isBinary(f) && readText(f).includes(CR + String.fromCharCode(10)),
+);
+if (withCR.length) {
+  fail(
+    withCR.length +
+      " shipped file(s) use CRLF, so this tarball is not reproducible on another platform: " +
+      withCR.slice(0, 3).join(", "),
+  );
+} else {
+  ok("no CRLF in shipped code");
+}
+
 // --- 7. the documented files are actually there --------------------------------
 
 let missingDoc = 0;
