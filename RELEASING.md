@@ -222,3 +222,10 @@ npm audit signatures                          # registry signature + provenance 
 The provenance attestation links the published tarball to the commit and the
 workflow run that produced it, signed by Sigstore and recorded in a public
 transparency log. It is visible on the package page on npmjs.com.
+
+The example above is `0.1.1` rather than `0.1.0` deliberately. `0.1.0` was
+published by hand, because npm cannot bind a trusted publisher to a package
+that does not exist yet, so it has a registry signature but no attestation.
+`npm audit signatures` will say so, and that is expected for that one version.
+Its integrity was still checked against the artifact the workflow built, and
+its GitHub Release says the same thing.
