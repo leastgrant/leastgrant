@@ -32,8 +32,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -p tsconfig.json --watch",
-    "test": "npm run build && node --test --test-reporter=spec \"dist/test/**/*.test.js\"",
-    "test:fast": "node --test --test-reporter=dot \"dist/test/**/*.test.js\"",
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "test:fast": "node scripts/run-tests.mjs --dot",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build && npm test",
     "release:check": "node scripts/release-rehearsal.mjs"

@@ -73,9 +73,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: No bypass may be auto-approved
-        run: node --test --test-reporter=spec dist/test/bypass.test.js
+        run: node scripts/run-tests.mjs bypass.test
       - name: No symlink traversal may read as contained
-        run: node --test --test-reporter=spec dist/test/symlink-traversal.test.js
+        run: node scripts/run-tests.mjs symlink-traversal
 
   # Path containment is the one piece of logic where being wrong is silent: a
   # path that reads as inside the project is simply allowed, with no error

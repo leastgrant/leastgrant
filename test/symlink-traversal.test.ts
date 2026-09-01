@@ -406,7 +406,10 @@ describe('resolution cannot be sidestepped by the shape of the input', () => {
     assert.equal(candidatesOf(c).length, 0);
   });
 
-  test('a drive-relative path with a traversal is unplaceable', () => {
+  // Windows only, because "drive-relative" is a Windows concept. To POSIX,
+  // `C:escape` is an ordinary directory whose name contains a colon, there is
+  // no hidden per-drive working directory, and nothing needs guarding.
+  test('a drive-relative path with a traversal is unplaceable', { skip: !WIN }, () => {
     // `C:foo` is relative to the current directory *of that drive*, which is
     // process state we do not have. Skipping the physical walk for it would
     // suppress the second candidate on a syntactic property of the input
@@ -415,9 +418,17 @@ describe('resolution cannot be sidestepped by the shape of the input', () => {
     assert.equal(candidatesOf(c).length, 0, 'must not resolve to a single confident answer');
   });
 
-  test('a drive-relative path without a traversal is unaffected', () => {
+  test('a drive-relative path without a traversal is unaffected', { skip: !WIN }, () => {
     const c = canonicalize('C:foo' + S + 'bar.ts', WS);
     assert.equal(candidatesOf(c).length, 1);
+  });
+
+  test('on POSIX the same string is just a directory with a colon in its name', { skip: WIN }, () => {
+    // The counterpart assertion, so the platform split is stated rather than
+    // left as an absence. Nothing is ambiguous here, so one candidate is right.
+    const c = canonicalize('C:escape/../notes.txt', WS);
+    assert.equal(candidatesOf(c).length, 1);
+    assert.equal(inWorkspace(c.abs, [WSC]), true, 'it resolves inside the project, like any relative path');
   });
 
   test('an unreadable component is unplaceable, not silently lexical', () => {
