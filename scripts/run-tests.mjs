@@ -60,6 +60,43 @@ if (!files.length) {
 const r = spawnSync(
   process.execPath,
   ['--test', `--test-reporter=${dot ? 'dot' : 'spec'}`, ...files],
-  { cwd: ROOT, stdio: 'inherit' },
+  { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
 );
+
+const out = `${r.stdout || ''}${r.stderr || ''}`;
+process.stdout.write(out);
+
+// In CI, say what failed in a way the run page and the API will show.
+//
+// A red step whose only annotation is "Process completed with exit code 1"
+// forces whoever is debugging to open the raw log — which is exactly the
+// moment when the person looking may not have permission to. The failing test
+// names and their assertions belong in the annotation.
+if (r.status !== 0 && process.env['GITHUB_ACTIONS']) {
+  const lines = out.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith('✖ failing tests:'));
+  const reported = [];
+  if (start >= 0) {
+    for (let i = start + 1; i < lines.length && reported.length < 25; i++) {
+      const line = lines[i];
+      if (!line.startsWith('✖ ')) continue;
+      const name = line.slice(2).replace(/\s*\([\d.]+ms\)\s*$/, '');
+      // The assertion message is the next indented line or two.
+      const detail = lines
+        .slice(i + 1, i + 4)
+        .filter((l) => /^\s+\S/.test(l))
+        .map((l) => l.trim())
+        .join(' | ')
+        .slice(0, 400);
+      const where = (lines[i - 1] || '').startsWith('test at ') ? lines[i - 1].slice(8) : '';
+      reported.push(`${name}${where ? ` [${where}]` : ''}${detail ? ` -- ${detail}` : ''}`);
+    }
+  }
+  if (reported.length) {
+    for (const line of reported) console.log(`::error title=test failure::${line}`);
+  } else {
+    console.log('::error title=test failure::the run failed but no failing test was parsed from the output');
+  }
+}
+
 process.exit(r.status ?? 1);
