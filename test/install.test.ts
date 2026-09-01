@@ -230,3 +230,14 @@ describe('install: agent attribution', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 });
+
+describe('the version is not written down twice', () => {
+  test('the CLI reports the version in package.json', () => {
+    // It was a literal in src/main.ts, and `npm version` does not edit source.
+    // So 0.2.0 shipped while `leastgrant --version` still said 0.1.0 — in a
+    // tool whose bug-report template asks you to quote your version.
+    const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')) as { version: string };
+    const r = spawnSync(process.execPath, [CLI, '--version'], { encoding: 'utf8', timeout: 30000 });
+    assert.equal((r.stdout ?? '').trim(), `leastgrant ${pkg.version}`);
+  });
+});

@@ -6,10 +6,37 @@
  * path, which runs before every single tool call, loads almost nothing.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { help, parseArgv, unknownCommand } from './cli/index.js';
 import { c } from './cli/ui.js';
 
-const VERSION = '0.1.0';
+/**
+ * The version, read from the package rather than typed here.
+ *
+ * It was a literal, and `npm version` does not edit source — so a release
+ * bumped package.json, shipped, and the CLI went on reporting the previous
+ * number. For a tool whose own docs tell you to quote your version in a bug
+ * report, and whose release pipeline verifies that what reached the registry is
+ * what it built, having two versions of the truth is the wrong kind of irony.
+ *
+ * Read lazily. The hook path returns above this and runs before every tool
+ * call; it should not pay for a file read to answer a question nobody asked.
+ */
+function version(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // dist/src/main.js -> ../../package.json
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(here, '..', '..', 'package.json'), 'utf8')) as {
+      version?: string;
+    };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 export async function main(rawArgs: string[]): Promise<number> {
   const argv = parseArgv(rawArgs);
@@ -23,7 +50,7 @@ export async function main(rawArgs: string[]): Promise<number> {
   }
 
   if (argv.flags['version'] || argv.flags['v'] || argv.command === 'version') {
-    process.stdout.write(`leastgrant ${VERSION}\n`);
+    process.stdout.write(`leastgrant ${version()}\n`);
     return 0;
   }
 
