@@ -352,6 +352,7 @@ jobs:
           PRERELEASE: ${{ needs.guard.outputs.prerelease }}
           SHA256: ${{ needs.publish.outputs.sha256 }}
           INTEGRITY: ${{ needs.publish.outputs.integrity }}
+          ALREADY: ${{ needs.publish.outputs.already_published }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           {
@@ -359,12 +360,30 @@ jobs:
             echo "npm install -g $PACKAGE_NAME@$VERSION"
             echo "\`\`\`"
             echo ''
-            echo "Published to npm from \`.github/workflows/release.yml\` with provenance."
-            echo "Verify it yourself:"
+            # Describe how this version actually reached the registry. If it was
+            # already there when the run started, this workflow did not publish
+            # it and cannot claim provenance for it — in practice that is the one
+            # hand publish that has to happen before a trusted publisher can be
+            # configured at all. Printing the usual sentence anyway would send
+            # readers to `npm audit signatures` expecting an attestation that is
+            # not there, and a failed check on a healthy package teaches people
+            # to ignore the check.
+            if [ "$ALREADY" = 'true' ]; then
+              echo "Published to npm by hand, before a trusted publisher existed for this"
+              echo "package, so this version carries no provenance attestation. Later"
+              echo "releases are published by \`.github/workflows/release.yml\` and do."
+            else
+              echo "Published to npm from \`.github/workflows/release.yml\` with provenance."
+            fi
+            echo ''
+            echo "Either way the bytes on the registry were checked, after the fact,"
+            echo "against the ones this workflow built and tested:"
             echo ''
             echo "\`\`\`"
             echo "npm view $PACKAGE_NAME@$VERSION dist.integrity   # $INTEGRITY"
-            echo "npm audit signatures"
+            if [ "$ALREADY" != 'true' ]; then
+              echo "npm audit signatures"
+            fi
             echo "\`\`\`"
             echo ''
             echo "\`$PACKAGE_NAME-$VERSION.tgz\` attached below is the exact artifact published."
@@ -372,9 +391,26 @@ jobs:
             echo "    sha256  $SHA256"
           } > "$NOTES"
 
-          # `--notes` (not `--notes-file`) is the documented way to prepend to
-          # auto-generated notes: "Additional release notes can be prepended to
-          # automatically generated notes by using the --notes flag."
+          # Append the auto-generated changelog here rather than passing
+          # `--generate-notes` to `gh release create`.
+          #
+          # `create` can generate notes; `edit` cannot. Using the flag would mean
+          # a first run produces a release with a changelog and a re-run — the
+          # recovery path, after a partial failure — quietly replaces it with one
+          # that has none. Idempotent has to mean the same release, not a
+          # degraded one, so both paths build the identical body from the same
+          # REST endpoint that backs the flag.
+          if gh api --method POST \
+               "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+               -f tag_name="$TAG" --jq '.body' > "$RUNNER_TEMP/generated.md" 2>/dev/null; then
+            printf '\n\n' >> "$NOTES"
+            cat "$RUNNER_TEMP/generated.md" >> "$NOTES"
+          else
+            # A missing changelog is not worth failing a release over; the parts
+            # that carry the security claims are already written above.
+            echo "::warning::could not generate the changelog; publishing notes without it"
+          fi
+
           # `--verify-tag` stops gh inventing a tag if one is somehow missing.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists; updating it in place"
@@ -383,8 +419,7 @@ jobs:
           else
             gh release create "$TAG" "$TGZ" "$TGZ.sha256" \
               --title "$TAG" \
-              --notes "$(cat "$NOTES")" \
-              --generate-notes \
+              --notes-file "$NOTES" \
               --verify-tag \
               --prerelease="$PRERELEASE"
           fi

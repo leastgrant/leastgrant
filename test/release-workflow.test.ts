@@ -321,6 +321,52 @@ describe('re-running cannot produce a half-release', () => {
     assert.match(rel, /--clobber/);
   });
 
+  test('a re-run produces the same release, not a shorter one', () => {
+    // Re-running is the documented recovery path, so the second run has to
+    // arrive at the same release body as the first. `gh release create` can
+    // generate a changelog and `gh release edit` cannot, so using that flag
+    // would make a recovery run silently replace the notes with a version
+    // missing everything the flag had added. Both paths must build the body
+    // from the same file instead.
+    const rel = jobBlock(uncommented(RELEASE), 'release');
+    assert.ok(
+      !rel.includes('--generate-notes'),
+      'the create path must not generate notes the edit path cannot reproduce',
+    );
+    assert.equal(
+      [...rel.matchAll(/--notes-file "\$NOTES"/g)].length,
+      2,
+      'both the create and the edit path must publish the same notes file',
+    );
+  });
+
+  test('the notes do not claim provenance for a version this run did not publish', () => {
+    // The first release of any package is a hand publish -- a trusted publisher
+    // cannot be configured until the package exists -- so it has no attestation.
+    // Printing the usual sentence anyway would point readers at a check that
+    // fails on a healthy package.
+    const rel = jobBlock(uncommented(RELEASE), 'release');
+    assert.match(rel, /ALREADY: \$\{\{ needs\.publish\.outputs\.already_published \}\}/);
+
+    const lines = rel.split('\n');
+    const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+    const branch = at(/if \[ "\$ALREADY" = 'true' \]/);
+    const otherwise = at(/^\s*else\s*$/);
+    const end = lines.findIndex((l, i) => i > otherwise && /^\s*fi\s*$/.test(l));
+    const claim = at(/Published to npm from .*with provenance/);
+
+    assert.ok(branch >= 0, 'the notes should branch on whether this run published');
+    assert.ok(
+      claim > otherwise && claim < end,
+      'the provenance claim belongs in the else branch, where this run did the publishing',
+    );
+    assert.equal(
+      lines.filter((l) => /with provenance/.test(l)).length,
+      1,
+      'exactly one unconditional-looking provenance sentence',
+    );
+  });
+
   test('everything is built from one commit, not from the tag', () => {
     // A tag can be moved. Pinning every checkout to the sha the run started
     // with means moving it mid-run cannot change what is released.
