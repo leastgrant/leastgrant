@@ -80,7 +80,17 @@ function tryLink(target: string, linkPath: string): string | false {
 // A real directory tree. Created once, removed in after().
 // ---------------------------------------------------------------------------
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-paths-'));
+/**
+ * The fixture root, canonicalized.
+ *
+ * `os.tmpdir()` is itself behind a symlink on macOS — `/var` is a link to
+ * `/private/var` — so the raw `mkdtemp` result and everything this suite
+ * compares it against (which goes through `realpath`) are two different
+ * strings for one directory. Resolving it once here is the difference between
+ * testing path containment and testing whether the fixture happens to live on
+ * a tidy filesystem.
+ */
+const TMP = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'lg-paths-')));
 
 after(() => {
   fs.rmSync(TMP, { recursive: true, force: true });
@@ -772,8 +782,19 @@ describe('posix path handling', { skip: WIN ? 'posix only' : false }, () => {
     assert.equal(path.basename(c.abs), 'weird.');
   });
 
-  test('paths are case-sensitive off Windows', () => {
-    assert.equal(isInside(path.join(WSC.toUpperCase(), 'src'), WSC), false);
+  test('case sensitivity follows the filesystem, not the platform', () => {
+    // Not "off Windows means case-sensitive": macOS is POSIX and its default
+    // filesystem is case-*in*sensitive, which is why `CASE_INSENSITIVE` covers
+    // darwin too. Asserting the platform rather than the behaviour is how this
+    // failed on every macOS runner while passing on Linux.
+    const upper = path.join(WSC.toUpperCase(), 'src');
+    assert.equal(
+      isInside(upper, WSC),
+      CASE_INSENSITIVE,
+      CASE_INSENSITIVE
+        ? 'on a case-insensitive filesystem the upper-case spelling is the same directory'
+        : 'on a case-sensitive filesystem it is a different directory entirely',
+    );
   });
 });
 
