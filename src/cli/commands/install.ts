@@ -17,10 +17,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { c, para, sym } from '../ui.js';
 import type { Argv } from '../index.js';
 
-export type AgentTarget = 'claude-code' | 'cursor' | 'copilot';
+export type AgentTarget = 'claude-code' | 'cursor' | 'copilot' | 'codex';
 
 interface Installed {
   agent: AgentTarget;
@@ -32,25 +33,172 @@ interface Installed {
 
 /** Absolute path to this package's CLI entry. */
 function selfCommand(): string {
-  // dist/src/cli/commands/install.js -> ../../../../bin/leastgrant.js
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const bin = path.resolve(here, '..', '..', '..', '..', 'bin', 'leastgrant.js');
-  const node = process.execPath;
-  const q = (s: string) => (/[\s"]/.test(s) ? JSON.stringify(s) : s);
-  return `${q(node)} ${q(bin)} hook`;
+  return `${nodeInvocation()} ${shellQuote(selfBin())} hook`;
 }
 
-/** Marker we use to recognise our own hook entries on uninstall. */
-const MARKER = 'leastgrant';
+/** dist/src/cli/commands/install.js -> ../../../../bin/leastgrant.js */
+function selfBin(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', '..', '..', 'bin', 'leastgrant.js');
+}
+
+/**
+ * How to name the Node executable so that no shell can misparse it.
+ *
+ * Agents run hook commands through a shell, and on Windows that shell is
+ * PowerShell — Codex and Copilot both do. PowerShell reads a statement that
+ * begins with a *quoted* string as a string expression rather than a command:
+ *
+ *     "C:\Program Files\nodejs\node.exe" hook.js
+ *     → Unexpected token 'hook.js' in expression or statement.
+ *
+ * Since the default Windows install of Node lives in `C:\Program Files\nodejs`,
+ * quoting is unavoidable, so the hook never started. The two agents then failed
+ * in opposite directions and both were wrong: Codex failed open and enforced
+ * nothing, Copilot failed closed and blocked everything.
+ *
+ * Only the *first* token has this problem — later arguments may be quoted
+ * freely. So the fix is to make the first token a space-free absolute path.
+ * On Windows that is the 8.3 short form when the volume has one; everywhere
+ * else the path is already fine, or gets quoted and the agent's shell is POSIX.
+ */
+function nodeInvocation(): string {
+  const exe = process.execPath;
+  if (!/[\s$`"']/.test(exe)) return exe;
+
+  // An absolute path with no shell-special characters, found by asking the
+  // filesystem rather than the PATH.
+  //
+  // The first attempt here resolved `node` on PATH and, if it was the same
+  // binary, wrote the bare word `node` into the hook command. That was a
+  // serious mistake: the hook then names a *program to be looked up* rather
+  // than a file, and the lookup happens later, in the agent's environment, at
+  // every tool call. A `node.exe` or `node.cmd` dropped in the working
+  // directory or anywhere earlier on PATH would then be executed as the
+  // permission layer itself — a repository could hand itself approval for
+  // everything by shipping a file.
+  //
+  // So: never a bare name. On Windows the 8.3 short form gives a space-free
+  // absolute path when the volume has short names, and it is the same file by
+  // construction rather than by lookup.
+  if (process.platform === 'win32') {
+    const short = shortPath(exe);
+    if (short && !/[\s$`"']/.test(short)) return short;
+  }
+  return shellQuote(exe);
+}
+
+/**
+ * The 8.3 short form of a path, or null.
+ *
+ * Short names can be disabled per volume, so this is an optimisation rather
+ * than a guarantee; the caller falls back to quoting.
+ */
+function shortPath(full: string): string | null {
+  // The target goes through the environment rather than the command line, so
+  // nothing about the path can be read as PowerShell syntax.
+  const r = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '(New-Object -ComObject Scripting.FileSystemObject).GetFile([string]$env:LG_TARGET).ShortPath',
+    ],
+    { encoding: 'utf8', windowsHide: true, env: { ...process.env, LG_TARGET: full } },
+  );
+
+  const out = (r.stdout ?? '').trim();
+  if (!out || !fs.existsSync(out)) return null;
+
+  // It is the same file by construction — the short name was derived from this
+  // exact path — but confirm rather than assume. `realpath` is no use here:
+  // Node does not expand 8.3, so the two spellings never compare equal as
+  // strings even when they are one file.
+  try {
+    const a = fs.statSync(out);
+    const b = fs.statSync(full);
+    if (a.size !== b.size || a.mtimeMs !== b.mtimeMs) return null;
+  } catch {
+    return null;
+  }
+  return out;
+}
+
+/**
+ * Quote a path for the shell that will run it.
+ *
+ * `JSON.stringify` looks like it does this and does not: it escapes
+ * backslashes, so `C:\Program Files\nodejs\node.exe` comes out as
+ * `"C:\\Program Files\\nodejs\\node.exe"`. Windows happens to collapse the
+ * doubled separators, so that has always worked — but it works by accident,
+ * it is confusing to anyone reading their own config file, and it would break
+ * on any runner that passes the string to a shell which treats a backslash as
+ * an escape.
+ *
+ * A Windows path cannot contain `"`, so wrapping is enough there. A POSIX path
+ * can contain almost anything, so single-quote it and close-escape-reopen
+ * around any embedded quote.
+ */
+function shellQuote(s: string): string {
+  if (process.platform === 'win32') {
+    return /[\s&|<>^()]/.test(s) ? `"${s.replace(/"/g, '')}"` : s;
+  }
+  return /[^A-Za-z0-9_@%+=:,./-]/.test(s) ? `'${s.split("'").join(`'\\''`)}'` : s;
+}
+
+/**
+ * The same command, written for PowerShell.
+ *
+ * Codex runs hook commands through PowerShell on Windows, and PowerShell reads
+ * a statement that begins with a quoted string as a *string expression*, not a
+ * command:
+ *
+ *     "C:\Program Files\nodejs\node.exe" script.js
+ *     → Unexpected token 'script.js' in expression or statement.
+ *
+ * Since the default Node install lives in `C:\Program Files\nodejs`, the path
+ * always needs quoting, so the hook always failed to start — and a hook that
+ * fails to start fails open. It was found by running a real Codex session and
+ * watching it print "PreToolUse Failed" and then run the command anyway.
+ *
+ * The call operator `&` is what makes PowerShell execute rather than evaluate.
+ * Single quotes because PowerShell does not interpolate inside them, so a `$`
+ * in a path cannot become a variable; a literal quote is escaped by doubling.
+ */
+function powershellQuote(s: string): string {
+  return `'${s.split("'").join("''")}'`;
+}
+
+/**
+ * How we recognise our own hook entries.
+ *
+ * It used to be the bare substring `leastgrant`, matched with `.includes()`
+ * against the whole command string. That is not an identity: a third-party
+ * hook whose command merely mentions the word — `node ~/leastgrant-notify.js`,
+ * or anything under a directory called `leastgrant` — was treated as ours.
+ * Install would overwrite it and then decline to add our own entry; uninstall
+ * would delete it. The module's own header promises "we never remove a hook we
+ * did not add", and it was removing other people's hooks.
+ *
+ * The marker is now the specific thing we write and nothing else: our entry
+ * point followed by the `hook` subcommand.
+ */
+const MARKER = /(^|[\\/"'\s])(bin[\\/])?leastgrant\.js["']?\s+hook(\s|$)/i;
+
+/** Is this a hook entry LeastGrant installed? */
+function isOurs(command: string | undefined): boolean {
+  return MARKER.test(String(command ?? ''));
+}
 
 export async function installCommand(argv: Argv): Promise<number> {
   const uninstall = argv.command === 'uninstall';
   const which = (argv.positional[0] as AgentTarget | undefined) ?? 'claude-code';
   const scope: 'user' | 'project' = argv.flags['project'] ? 'project' : 'user';
 
-  if (which !== 'claude-code' && which !== 'cursor' && which !== 'copilot') {
+  if (which !== 'claude-code' && which !== 'cursor' && which !== 'copilot' && which !== 'codex') {
     process.stderr.write(
-      `\n  ${c.red('Unknown agent')} ${which}\n  ${c.gray('Supported: claude-code, cursor, copilot')}\n\n`,
+      `\n  ${c.red('Unknown agent')} ${which}\n  ${c.gray('Supported: claude-code, cursor, copilot, codex')}\n\n`,
     );
     return 2;
   }
@@ -62,7 +210,9 @@ export async function installCommand(argv: Argv): Promise<number> {
         ? cursor(scope, uninstall)
         : which === 'copilot'
           ? copilot(scope, uninstall)
-          : claudeCode(scope, uninstall);
+          : which === 'codex'
+            ? codex(scope, uninstall)
+            : claudeCode(scope, uninstall);
   } catch (err) {
     process.stderr.write(`\n  ${c.red('Could not update the settings file.')} ${(err as Error).message}\n\n`);
     return 1;
@@ -143,7 +293,7 @@ function claudeCode(scope: 'user' | 'project', uninstall: boolean): Installed {
 
   for (const event of ['PreToolUse', 'PostToolUse']) {
     const list = (settings.hooks[event] ??= []);
-    const ours = (m: HookMatcher) => (m.hooks ?? []).some((h) => (h.command ?? '').includes(MARKER));
+    const ours = (m: HookMatcher) => (m.hooks ?? []).some((h) => isOurs(h.command));
 
     if (uninstall) {
       const before = list.length;
@@ -152,7 +302,7 @@ function claudeCode(scope: 'user' | 'project', uninstall: boolean): Installed {
       // same matcher must survive.
       for (const m of list) {
         if (!m.hooks) continue;
-        const kept = m.hooks.filter((h) => !(h.command ?? '').includes(MARKER));
+        const kept = m.hooks.filter((h) => !isOurs(h.command));
         if (kept.length !== m.hooks.length) changed = true;
         m.hooks = kept;
       }
@@ -162,7 +312,24 @@ function claudeCode(scope: 'user' | 'project', uninstall: boolean): Installed {
       continue;
     }
 
-    if (list.some(ours)) continue; // idempotent
+    if (list.some(ours)) {
+      // Present already — but refresh it if the command has gone stale.
+      //
+      // Idempotent used to mean "leave it alone", which quietly broke anyone
+      // who moved their checkout or changed Node version: the hook still
+      // pointed at a path that no longer existed, the agent could not run it,
+      // and a hook that fails to start fails open. Reinstalling is the obvious
+      // thing to try and it did nothing.
+      for (const m of list) {
+        for (const h of m.hooks ?? []) {
+          if (isOurs(h.command) && h.command !== command) {
+            h.command = command;
+            changed = true;
+          }
+        }
+      }
+      continue;
+    }
     list.push({
       matcher: '*',
       hooks: [{ type: 'command', command, timeout: 10 }],
@@ -213,7 +380,7 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
       : path.join(process.cwd(), '.cursor', 'hooks.json');
 
   const cfg = readJson<CursorHooks>(file) ?? { version: 1, hooks: {} };
-  cfg.hooks ??= {};
+  const hooks: Record<string, { command: string }[]> = (cfg.hooks ??= {});
   const command = selfCommand().replace(/ hook$/, ' hook --agent cursor');
   let changed = false;
 
@@ -227,16 +394,20 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     'afterShellExecution',
     'afterMCPExecution',
   ]) {
-    const list = (cfg.hooks[event] ??= []);
-    const idx = list.findIndex((h) => (h.command ?? '').includes(MARKER));
+    const list: { command: string }[] = (hooks[event] ??= []);
+    const idx = list.findIndex((h) => isOurs(h.command));
     if (uninstall) {
       if (idx >= 0) {
         list.splice(idx, 1);
         changed = true;
       }
-      if (list.length === 0) delete cfg.hooks[event];
+      if (list.length === 0) delete hooks[event];
     } else if (idx < 0) {
       list.push({ command });
+      changed = true;
+    } else if (list[idx]!.command !== command) {
+      // Refresh a stale path rather than leaving a hook that cannot start.
+      list[idx]!.command = command;
       changed = true;
     }
   }
@@ -250,6 +421,111 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     note: uninstall
       ? undefined
       : 'Cursor covers shell commands, MCP calls and file reads. Reads are allow-or-block only (Cursor has no "ask" for them), so an unfamiliar read is allowed and a credential read is blocked. Written against the published hook contract and unit-tested, but not yet verified against a live install.',
+  } as Installed;
+}
+
+// ---------------------------------------------------------------------------
+// Codex CLI
+// ---------------------------------------------------------------------------
+
+/**
+ * Codex reads `~/.codex/hooks.json`, or `<project>/.codex/hooks.json` for a
+ * project scope. The event names are Claude Code's, but the handler must know
+ * it is talking to Codex — Codex rejects `ask` and then runs the call anyway —
+ * so the command carries `--agent codex`.
+ *
+ * `PermissionRequest` is registered as well as `PreToolUse`. It fires only when
+ * Codex was already going to prompt, which is exactly where suppressing a
+ * prompt for something familiar is worth the most.
+ */
+function codex(scope: 'user' | 'project', uninstall: boolean): Installed {
+  const dir = scope === 'user' ? path.join(os.homedir(), '.codex') : path.join(process.cwd(), '.codex');
+  const file = path.join(dir, 'hooks.json');
+  const command = `${selfCommand()} --agent codex`;
+
+  // On Windows, also write the PowerShell form. Codex runs hook commands
+  // through PowerShell, where the plain form does not execute at all.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const bin = path.resolve(here, '..', '..', '..', '..', 'bin', 'leastgrant.js');
+  const commandWindows =
+    process.platform === 'win32'
+      ? `& ${powershellQuote(process.execPath)} ${powershellQuote(bin)} hook --agent codex`
+      : undefined;
+  const entry = (): CodexEntry =>
+    commandWindows
+      ? { type: 'command', command, commandWindows }
+      : { type: 'command', command };
+
+  interface CodexEntry {
+    type?: string;
+    command?: string;
+    /**
+     * Codex's own Windows override. It exists precisely because the two
+     * platforms need different command strings, and here they do: PowerShell
+     * needs the call operator.
+     */
+    commandWindows?: string;
+  }
+  interface CodexGroup {
+    matcher?: string;
+    hooks?: CodexEntry[];
+  }
+  interface CodexHooks {
+    hooks?: Record<string, CodexGroup[]>;
+  }
+
+  const cfg = (readJson<CodexHooks>(file) ?? {}) as CodexHooks;
+  const hooks: Record<string, CodexGroup[]> = (cfg.hooks ??= {});
+  let changed = false;
+
+  for (const event of ['PreToolUse', 'PermissionRequest', 'PostToolUse']) {
+    const groups: CodexGroup[] = (hooks[event] ??= []);
+    let found = false;
+    for (const group of groups) {
+      const list: CodexEntry[] = group.hooks ?? [];
+      const idx = list.findIndex((h) => isOurs(h.command));
+      if (idx >= 0) {
+        found = true;
+        if (uninstall) {
+          list.splice(idx, 1);
+          changed = true;
+        } else if (list[idx]!.command !== command || list[idx]!.commandWindows !== commandWindows) {
+          // Refresh a stale path rather than leaving a hook that cannot start.
+          // The Windows form counts: an install from before it existed left a
+          // hook PowerShell silently refused to run.
+          list[idx]! = entry();
+          changed = true;
+        }
+      }
+    }
+    if (uninstall) {
+      const kept = groups.filter((g: CodexGroup) => (g.hooks ?? []).length > 0);
+      if (kept.length === 0) delete hooks[event];
+      else hooks[event] = kept;
+    } else if (!found) {
+      groups.push({ matcher: '*', hooks: [entry()] });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    fs.mkdirSync(dir, { recursive: true });
+    writeJsonPreservingStyle(file, cfg);
+  }
+
+  return {
+    agent: 'codex',
+    scope,
+    file,
+    changed,
+    note: uninstall
+      ? undefined
+      : 'Codex has no "ask": it rejects that decision and runs the call anyway. So allow and deny ' +
+        'are enforced, and an ask defers to Codex’s own approval prompt. In dontAsk or ' +
+        'bypassPermissions nothing can prompt you, and there an ask becomes a deny at a floor ' +
+        '(credentials, exfiltration, persistence, unreadable code) and is left ungated otherwise. ' +
+        'Codex also requires you to trust a hook before it runs: open Codex and run /hooks. ' +
+        'Written against codex-cli 0.152.0 and unit-tested, but not yet verified against a live install.',
   } as Installed;
 }
 
@@ -275,10 +551,17 @@ function copilot(scope: 'user' | 'project', uninstall: boolean): Installed {
     return { agent: 'copilot', scope, file, changed: existed };
   }
 
+  // `--agent copilot` only changes attribution. Copilot speaks Claude Code's
+  // wire format — snake_case fields in, `hookSpecificOutput` out, and it
+  // honours all three verdicts — so the Claude handler renders for it
+  // correctly. Without the flag though, every Copilot call was recorded in the
+  // ledger as `claude-code`, so `leastgrant trail` credited one agent's
+  // behaviour to another.
+  const command = `${selfCommand()} --agent copilot`;
   const body = {
     hooks: {
-      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: selfCommand() }] }],
-      PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: selfCommand() }] }],
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }],
+      PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }],
     },
   };
   const next = JSON.stringify(body, null, 2) + '\n';
@@ -293,9 +576,9 @@ function copilot(scope: 'user' | 'project', uninstall: boolean): Installed {
 // ---------------------------------------------------------------------------
 
 function readJson<T>(file: string): T | null {
+  let parsed: unknown;
   try {
-    const raw = fs.readFileSync(file, 'utf8');
-    return JSON.parse(raw) as T;
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'ENOENT') return null;
@@ -304,6 +587,22 @@ function readJson<T>(file: string): T | null {
       `${file} could not be read as JSON (${e.message}). LeastGrant has not changed it — fix the file and try again.`,
     );
   }
+
+  // Valid JSON is not the same as a settings file.
+  //
+  // A top-level array, or a string, or `true`, parses fine and then every
+  // property assignment against it either vanishes or lands somewhere useless.
+  // The installer went on to report "✓ Installed" and exit 0 having written
+  // nothing — the worst outcome available, because the user now believes they
+  // are protected. Anything that is not a plain object is refused out loud.
+  if (parsed === null) return null;
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `${file} is ${Array.isArray(parsed) ? 'a JSON array' : `a JSON ${typeof parsed}`}, not a settings object. ` +
+        `LeastGrant has not changed it — fix the file and try again.`,
+    );
+  }
+  return parsed as T;
 }
 
 /**
@@ -337,5 +636,5 @@ export function isClaudeInstalled(scope: 'user' | 'project'): boolean {
     }
   })();
   const pre = settings?.hooks?.['PreToolUse'] ?? [];
-  return pre.some((m) => (m.hooks ?? []).some((h) => (h.command ?? '').includes(MARKER)));
+  return pre.some((m) => (m.hooks ?? []).some((h) => isOurs(h.command)));
 }

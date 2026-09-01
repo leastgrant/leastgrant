@@ -100,6 +100,30 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
   const worst = judged[0]!;
   const reasons = [...worst.reasons];
 
+  // Every guard that fired, not just the ones on the winning action.
+  //
+  // `worst` is chosen by decision rank and then by blast tier, which is right
+  // for picking *a verdict* and wrong for reporting *why*. In
+  // `rm -rf ./build && cat ~/.ssh/id_rsa` the delete has the larger blast tier
+  // and fires no guard at all, so it wins the sort — and the credential read's
+  // `guard.secret-read` was dropped from the reasons and from `floor`.
+  //
+  // That was invisible while `floor` only drove a sentence in the CLI. It stops
+  // being invisible the moment an adapter uses it to decide, which is what the
+  // Codex adapter now does: floor false means "merely unfamiliar", so it stood
+  // aside and let the credential read run.
+  //
+  // Deduped by code: the same guard firing on three actions is one reason to a
+  // human.
+  const seen = new Set(reasons.map((r) => r.code));
+  for (const other of judged.slice(1)) {
+    for (const hit of other.hits) {
+      if (seen.has(hit.id)) continue;
+      seen.add(hit.id);
+      reasons.push({ code: hit.id, text: hit.text, weight: 'blocks' });
+    }
+  }
+
   // When several actions are bundled, say so — it changes what the human is
   // actually agreeing to.
   if (judged.length > 1) {
@@ -124,7 +148,8 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
     actions: analysis.actions,
     reasons,
     headline: headlineFor(decision, worst.action, reasons),
-    floor: worst.hits.length > 0,
+    // Any action's guard, not just the winning one — see the note above.
+    floor: judged.some((j) => j.hits.length > 0),
     familiarity: worst.fam,
   };
 }

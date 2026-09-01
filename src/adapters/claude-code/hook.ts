@@ -56,7 +56,15 @@ interface HookInput {
 }
 
 /** Permission modes in which the human is not being consulted at all. */
-const UNATTENDED = new Set(['bypassPermissions', 'acceptEdits', 'dontAsk', 'auto']);
+/**
+ * The modes in which a prompt actually reaches a person.
+ *
+ * Deliberately an allowlist. The previous blocklist —
+ * `['bypassPermissions', 'acceptEdits', 'dontAsk', 'auto']` — was correct about
+ * every mode it named and wrong about every mode it did not, and "every mode it
+ * did not" included "no mode was sent".
+ */
+const ATTENDED = new Set(['default', 'plan', 'ask']);
 
 /**
  * Was a human actually in the loop when this call was decided?
@@ -67,7 +75,21 @@ const UNATTENDED = new Set(['bypassPermissions', 'acceptEdits', 'dontAsk', 'auto
  * it in a test file that can drift.
  */
 export function wasAttended(posture: string, permissionMode: string | undefined): boolean {
-  return posture !== 'observe' && !UNATTENDED.has(permissionMode ?? 'default');
+  if (posture === 'observe') return false;
+  // An allowlist of modes in which a human is genuinely consulted, not a
+  // blocklist of the ones where they are not.
+  //
+  // This used to default an absent or unrecognised mode to `default`, i.e. to
+  // "a human approved it" — the most generous reading available. Copilot sends
+  // no mode at all, so every Copilot call that completed was banked as a human
+  // approval, and any future agent that omits the field, or names a mode this
+  // build has never heard of, would do the same. Manufactured `confirmed`
+  // evidence is the one input that can promote a signature, so getting this
+  // wrong lets an agent train the thing that is supposed to be watching it.
+  //
+  // Unknown now means observed. The cost is that such agents learn more slowly;
+  // the alternative cost is that they learn things nobody agreed to.
+  return ATTENDED.has(String(permissionMode ?? '').toLowerCase());
 }
 
 /** The evidence a completed call earns. See the note in `postToolUse`. */
@@ -85,6 +107,24 @@ export async function runHook(): Promise<void> {
   }
 
   try {
+    // Codex before Claude Code, because their event names collide.
+    //
+    // Codex sends `PreToolUse` and `PostToolUse` with the same field names,
+    // but it rejects `permissionDecision: "ask"` — and then runs the call
+    // anyway. Falling through to the Claude Code renderer would therefore turn
+    // every `ask` into a silent allow on Codex, which is the one failure this
+    // project cannot have. The installer writes `--agent codex`; the payload
+    // check behind it is for a hand-edited config that lost the flag.
+    const { isCodexEvent, looksLikeCodex, runCodexHook } = await import('../codex/hook.js');
+    const flaggedCodex = agentFlag() === 'codex';
+    if (isCodexEvent(String(input.hook_event_name ?? '')) && (flaggedCodex || looksLikeCodex(input))) {
+      if (!flaggedCodex) {
+        logLine('codex: routed by payload shape, not by --agent codex; re-run `leastgrant install codex`');
+      }
+      runCodexHook(input);
+      process.exit(0);
+    }
+
     // Matched case-insensitively. The event name is chosen by the agent, not
     // by an attacker, so this is not a security boundary — but a client that
     // spelled it `pretooluse` would silently turn LeastGrant off, and going
@@ -130,6 +170,22 @@ export interface PreOutcome {
   silent: boolean;
   /** Reason codes behind the decision, for adapters that must map it down. */
   reasons: string[];
+  /**
+   * True when a floor produced this verdict, rather than a shortage of
+   * evidence.
+   *
+   * The distinction only matters to an adapter whose agent cannot express
+   * `ask` — Codex is the case — because the two kinds of `ask` deserve
+   * opposite fallbacks. An `ask` from a floor is one of the things the design
+   * says learning must never unlock, so letting it through silently is the
+   * exact harm the floor exists to prevent. An `ask` from "I have not seen
+   * this enough times yet" is ordinary unfamiliarity, and blocking all of it
+   * would make a fresh install unusable.
+   *
+   * Inferring this from the presence of a `floor.explain` reason code worked,
+   * but tied a security decision to a string meant for humans. It is a field.
+   */
+  floor: boolean;
 }
 
 /**
@@ -213,6 +269,14 @@ export function judgePre(p: {
       headline: 'LeastGrant could not evaluate this tool call, so it is asking rather than guessing',
       silent: config.posture === 'observe',
       reasons: ['engine.error'],
+      // Counted as a floor, deliberately.
+      //
+      // `floor` tells an adapter whose agent cannot express `ask` which way to
+      // fall. "I could not evaluate this" must fall the same way a credential
+      // read does: an input that reliably crashes the classifier would
+      // otherwise be a complete bypass on Codex in an unattended mode, which
+      // is the outcome the paragraph above exists to prevent.
+      floor: true,
     };
   }
 
@@ -275,12 +339,45 @@ export function judgePre(p: {
     headline: verdict.headline,
     silent: config.posture === 'observe',
     reasons: verdict.reasons.map((r) => r.code),
+    floor: Boolean(verdict.floor),
   };
+}
+
+/**
+ * Which agent is on the other end.
+ *
+ * Copilot speaks Claude Code's wire format exactly, so it lands in this
+ * handler and renders correctly — but it is not Claude Code, and recording it
+ * as such made `leastgrant trail` attribute one agent's behaviour to another.
+ * The installer writes `--agent copilot`; anything else is Claude Code.
+ */
+function callingAgent(): string {
+  return agentFlag() === 'copilot' ? 'copilot' : 'claude-code';
+}
+
+/**
+ * The value of `--agent`, however it was written.
+ *
+ * Both spellings, because both are ordinary: `--agent codex` and
+ * `--agent=codex`. The first version of this checked
+ * `argv.includes('codex') && argv.includes('--agent')`, which got the equals
+ * form wrong in the worst possible way — the flag was present, the check said
+ * no, and a Codex payload went to the Claude Code renderer, which answers
+ * `ask`, which Codex rejects and then runs. It also matched a bare `codex`
+ * token anywhere in argv, so it was simultaneously too strict and too loose.
+ */
+export function agentFlag(argv: string[] = process.argv): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === '--agent') return argv[i + 1]?.toLowerCase();
+    if (arg.startsWith('--agent=')) return arg.slice('--agent='.length).toLowerCase();
+  }
+  return undefined;
 }
 
 function preToolUse(input: HookInput): never {
   const out = judgePre({
-    agent: 'claude-code',
+    agent: callingAgent(),
     cwd: input.cwd ?? '',
     tool: input.tool_name ?? 'unknown',
     input: input.tool_input ?? {},

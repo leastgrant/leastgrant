@@ -1038,7 +1038,65 @@ weigh before trusting this:
 
 ---
 
-## 7. Reporting
+## 7. What the multi-agent audit found
+
+Adding the Codex and Copilot adapters widened the attack surface in a way the v0.1.0
+audit could not have covered: three more agents, each with its own wire format, its own
+permission modes, and its own idea of what to do when a hook misbehaves. The same
+treatment was applied — independent adversarial passes with every reported finding
+reproduced or refuted against the shipped binary — and it found more than the first
+audit did, in a smaller amount of new code.
+
+Two of these were reachable in the field, not in theory, and both are the same shape:
+LeastGrant returning a confident answer about something it had not actually judged.
+
+**A floor on any part of a compound command was erased.** `decide()` picks a "worst"
+action by decision rank and then by blast tier, and the verdict's `floor` flag was read
+off that one action's guards. In `rm -rf ./build && cat ~/.ssh/id_rsa` the delete has the
+larger blast tier and fires no guard at all, so it won the sort — and the credential
+read's `guard.secret-read` vanished from both the reasons and the floor. Under Claude
+Code this only cost a sentence of explanation, because the decision was still `ask`. It
+became a hole the moment an adapter used `floor` to decide something, which is exactly
+what the Codex adapter does when it cannot express `ask`: floor false means "merely
+unfamiliar", so it stood aside and the credential read ran. `floor` and the reasons now
+aggregate across every action.
+
+**An untranslatable call was reported as a clean one.** The Codex adapter normalised an
+unrecognised `tool_input` to `{}`, and `{}` is not "unknown" — it is "a call with no
+arguments". The engine judged that as a fully understood, floorless no-op. So a shell
+command sent as a bare string or as Codex's argv array, and a patch whose target path the
+adapter could not find, all came back clean. An adapter that cannot faithfully translate
+a call must not produce a verdict about it; it now says so and fails strict.
+
+**Also fixed.** A hook command that quoted the path to `node.exe` never ran at all under
+PowerShell, which is the shell Codex and Copilot both use on Windows — Codex then failed
+open and enforced nothing, Copilot failed closed and blocked everything. `--agent=codex`
+in its equals form defeated the routing check, sending Codex a response shape it rejects
+and then ignores. `dontAsk` was used as proof-of-Codex when it is also a Claude Code
+mode, pulling Claude Code traffic into an adapter that cannot ask. An absent
+`permission_mode` — which Copilot never sends — was read as "a human approved this", so
+completed calls were banked as `confirmed` evidence, the one kind that promotes a
+signature. The installer's marker was the bare substring `leastgrant`, so it overwrote
+and deleted third-party hooks that merely mentioned the word, in direct contradiction of
+its own stated contract. A settings file containing a JSON array was reported as
+successfully installed while nothing was written.
+
+**What this says about the design.** Every one of these lives at a boundary — between an
+agent's vocabulary and LeastGrant's, or between "I judged this" and "I could not". None
+of them is a flaw in the decision engine's reasoning; all of them are places where an
+adapter answered a question it had not asked. That is the failure mode to look for in the
+next adapter, and the reason each of them now fails strict rather than quiet.
+
+**Still standing.** In an unattended Codex mode, a command LeastGrant cannot read — the
+`python -c '<anything>'` class, which is roughly half of real traffic — is left ungated
+rather than denied. That is a deliberate trade explained in the README: denying it would
+block most of an unattended run, and a gate that blocks most of your work is a gate people
+remove. It is the same hole you already have by running unattended at all, so LeastGrant
+does not make it worse; it also does not close it.
+
+---
+
+## 8. Reporting
 
 See [SECURITY.md](SECURITY.md) for how to report a vulnerability privately, and for the
 project's definition of one: any input that causes LeastGrant to return `allow` for an

@@ -390,19 +390,67 @@ would have let through.
 |---|---|---|
 | **Claude Code** | Enforcing, tested end to end | `PreToolUse` decides; `PostToolUse` is how it learns you approved something. Read against v2.1.240's behaviour, and every hook test in the suite drives the real binary over real stdin. |
 | **Cursor** | Enforcing, not yet verified against a live install | `hooks.json` — shell, MCP and file reads, plus the matching `after*` events so it can learn. Written against Cursor's published hook contract; the request and response shapes are unit-tested, including a test that the same command gets the same verdict here as under Claude Code. Nobody has run it inside a real Cursor yet. |
-| **GitHub Copilot CLI** | Installer only, unverified | Copilot reads Claude-format hook definitions, so the existing handler should work unchanged — "should" being the operative word, as with Cursor. |
-| **Codex CLI** | Not yet | No third-party tool-call hook exists, and LeastGrant does not read Codex session logs either. |
-| **Gemini CLI, others** | Not yet | An adapter is a translation layer over the shared engine — the Cursor one is about 180 lines. See [CONTRIBUTING.md](https://github.com/leastgrant/leastgrant/blob/main/CONTRIBUTING.md). |
+| **GitHub Copilot CLI** | Enforcing, tested end to end | `~/.copilot/hooks/leastgrant.json`. It really does speak Claude Code's wire format — snake_case fields in, `hookSpecificOutput` out — and it honours all three verdicts, so the same handler drives it. Verified against Copilot CLI 1.0.82 with real `copilot -p` runs. It is also the one agent that **fails closed**: if the hook errors, Copilot denies the call rather than running it. |
+| **Codex CLI** | Enforcing, tested end to end | `~/.codex/hooks.json` — `PreToolUse`, `PermissionRequest` and `PostToolUse`. Codex has no `ask`: it parses that decision, rejects it, and runs the call anyway, so the mapping below is not the obvious one. Verified against codex-cli 0.152.0 by driving real `codex exec` sessions: a credential read and a write to LeastGrant's own records were both blocked, while `node --version` and `git status` ran untouched. `PermissionRequest` has not fired in anger — `codex exec` runs unattended, where by definition nothing prompts. Codex also makes you trust a hook before it runs, and re-flags it whenever its definition changes: `/hooks`. |
+| **Gemini CLI, others** | Not yet | An adapter is a translation layer over the shared engine — the Cursor one is about 200 lines. See [CONTRIBUTING.md](https://github.com/leastgrant/leastgrant/blob/main/CONTRIBUTING.md). |
 
 One profile, one set of floors, whichever agent you are using that day. Every adapter calls the
 same `judgePre` and `recordPost`, so there is one decision path rather than one per editor — a
 security story that changes depending on which editor you opened is not a security story.
 
-Cursor caveat worth stating in the open: its `beforeReadFile` event takes allow or deny and has no
-"ask". An unfamiliar read is therefore allowed rather than blocked, because turning every
-unrecognised file read into a hard failure would make the integration unusable. A read of something
-LeastGrant recognises as a credential *is* blocked. Shell commands and MCP calls get the full
-allow/deny/ask.
+Two caveats worth stating in the open, because both are places an agent cannot express `ask` and
+LeastGrant has to decide what to do instead.
+
+**Cursor.** Its `beforeReadFile` event takes allow or deny and has no "ask". An unfamiliar read is
+therefore allowed rather than blocked, because turning every unrecognised file read into a hard
+failure would make the integration unusable. A read of something LeastGrant recognises as a
+credential *is* blocked. Shell commands and MCP calls get the full allow/deny/ask.
+
+**Codex.** It has no `ask` at all — `permissionDecision: "ask"` is parsed, rejected, and the call
+runs anyway. What LeastGrant does instead depends on whether anything could still reach you, which
+the payload's `permission_mode` tells it:
+
+| mode | an `ask` becomes |
+|---|---|
+| `default`, `acceptEdits`, `plan` | nothing — LeastGrant stands aside and Codex prompts you. A real ask. |
+| `dontAsk`, `bypassPermissions` | **deny** if LeastGrant knows the action is dangerous; ungated if it merely could not read it. |
+
+That second row is the interesting one, and the line it draws is between *knowledge* and
+*ignorance*. A credential read, exfiltration, persistence, privilege escalation, running
+just-downloaded code, an irreversible delete, a write outside the project, or a classifier that
+crashed — all denied, because for those the harm is exactly "it was allowed through". But roughly
+half of real commands are merely *not understood*: `node --version`, `make test`, `./deploy.sh`,
+anything with an inline script. Denying those too would block most of an unattended run, and a gate
+that blocks most of your work is a gate people remove — which leaves them with less protection, not
+more. So ignorance stands aside.
+
+The cost of that line is real and worth naming: in an unattended mode, `python -c '<anything>'` gets
+through. That is the same hole you already have by running unattended at all, so LeastGrant is not
+making it worse — but it is not closing it either.
+
+So on Codex, in the unattended modes, LeastGrant is a veto rather than a prompt: strictly better
+than running Codex without it, and strictly weaker than LeastGrant on Claude Code, where an `ask`
+reaches you in every mode. A mode Codex adds in future that this table has not heard of is treated
+as unable to prompt, so new modes make it stricter rather than quietly toothless.
+
+**Copilot** honours all three verdicts, so there is no mapping to explain — but note that
+non-interactive runs (`copilot -p`) have nobody to ask, and Copilot turns an `ask` into a deny
+there. That is the safe direction, and it is Copilot's choice rather than LeastGrant's, but it does
+mean a scripted Copilot run will stop on anything LeastGrant cannot account for.
+
+Two operational notes, both learned the hard way.
+
+**Codex binds hook trust to a hash of the definition**, so upgrading or reinstalling LeastGrant
+re-flags the hook and it stops running until you re-trust it in `/hooks`. That is Codex being
+careful rather than a bug, but the failure is quiet.
+
+**On Windows, agents run hook commands through PowerShell.** PowerShell reads a statement beginning
+with a quoted string as a string expression rather than a command, so a hook command that quoted
+the path to `node.exe` — which the default install in `C:\Program Files\nodejs` forces — never
+started at all. The two agents then failed in opposite directions and both were wrong: Codex failed
+open and enforced nothing, Copilot failed closed and blocked everything. The installer now emits a
+first token with no spaces, which no shell can misparse. If you hand-edit a hook command, keep that
+property.
 
 ## Privacy
 
