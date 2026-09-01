@@ -1,0 +1,322 @@
+/**
+ * Action signatures: the identity under which we learn.
+ *
+ * `git commit -m "fix login bug"` and `git commit -m "bump deps"` are the same
+ * habit and should count together. `git push` and `git push --force` are not.
+ * Getting that line right is most of what makes the learning feel intelligent
+ * rather than either forgetful or reckless.
+ *
+ * Two rules keep generalization safe:
+ *
+ *  1. **Normalize the parsed argv, never the raw string.** Regexes over a
+ *     command line are how `git checkout <SHA>-e29b-...-<SHA>` happens, and
+ *     worse, how two commands with different meanings collapse into one
+ *     signature. We template per token, after parsing.
+ *
+ *  2. **Risk-relevant distinctions survive templating.** A path argument does
+ *     not become `<path>`; it becomes `<path>`, `<path:outside>` or
+ *     `<path:secret>` depending on where it points. A URL keeps its hostname.
+ *     So no amount of learning about `cat <path>` can ever quietly cover
+ *     `cat ~/.ssh/id_rsa` — they are different signatures, and the second also
+ *     trips a floor.
+ */
+
+import { UNRESOLVED } from './shell/tokenize.js';
+
+export interface SignatureCtx {
+  resolve(arg: string): string;
+  inWorkspace(abs: string): boolean;
+  isSecret(abs: string): boolean;
+  looksLikePath(arg: string): boolean;
+}
+
+const SHA = /^[0-9a-f]{7,40}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NUM = /^[+-]?\d+(\.\d+)?$/;
+const VERSION = /^v?\d+\.\d+(\.\d+)?([-+][\w.]+)?$/;
+const PORT = /^:\d{2,5}$/;
+const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * Normalize a single argument into a placeholder, or return it unchanged.
+ *
+ * Order matters: UUID must be tested before SHA, or a UUID's hex runs get
+ * eaten piecemeal by the SHA rule.
+ */
+export function normalizeArg(arg: string, ctx: SignatureCtx): string {
+  if (!arg) return arg;
+  if (arg.includes(UNRESOLVED)) return '<dynamic>';
+
+  if (URLISH.test(arg)) {
+    const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:?#\s]+)/i.exec(arg);
+    return m ? `<url:${m[1]!.toLowerCase()}>` : '<url>';
+  }
+
+  if (UUID.test(arg)) return '<uuid>';
+  if (SHA.test(arg) && arg.length >= 7 && /\d/.test(arg) && /[a-f]/i.test(arg)) return '<sha>';
+  if (VERSION.test(arg)) return '<version>';
+  if (NUM.test(arg)) return '<n>';
+  if (PORT.test(arg)) return '<port>';
+
+  // `user@host:path` — an scp-style remote.
+  if (/^[\w.-]+@[\w.-]+:/.test(arg)) return '<remote>';
+
+  if (ctx.looksLikePath(arg)) {
+    const abs = ctx.resolve(arg);
+    if (!abs) return '<path:unresolved>';
+    if (ctx.isSecret(abs)) return '<path:secret>';
+    if (!ctx.inWorkspace(abs)) return '<path:outside:' + outsideZone(abs) + '>';
+    return '<path>';
+  }
+
+  // Free text: a commit message, a search pattern, a SQL string. Anything with
+  // whitespace or that is long is not an identifier worth learning verbatim —
+  // except that a SQL statement's verb is exactly the part that matters.
+  if (/\s/.test(arg) || arg.length > 48) return sqlShape(arg) ?? '<text>';
+
+  return arg;
+}
+
+/**
+ * Build a signature for a shell command.
+ *
+ * Flags are kept (they change behaviour) and sorted (their order does not).
+ * Flag *values* are normalized like positional arguments, so
+ * `--output=/tmp/x` becomes `--output=<path:outside>`.
+ */
+/**
+ * A signature fragment for leading environment assignments.
+ *
+ * `PATH=./tools:$PATH git status` and `git status` used to be the same learned
+ * thing, so approving the second taught LeastGrant to allow the first. Values
+ * are normalized like any other argument; the names are what matter.
+ */
+export function assignmentSignature(
+  assignments: { name: string; value: string }[],
+  ctx: SignatureCtx,
+): string {
+  if (!assignments.length) return '';
+  return (
+    assignments
+      .map((a) => a.name + '=' + normalizeArg(a.value, ctx))
+      .sort()
+      .join(' ') + ' '
+  );
+}
+
+/**
+ * A coarse label for where outside the project a path lives.
+ *
+ * Every outside path used to normalize to the single token `<path:outside>`,
+ * which meant approving one read of one file outside the project taught
+ * LeastGrant to allow reading *any* file outside the project. Splitting the
+ * token by region keeps the learning useful — a build that reads
+ * `/usr/share/...` every time still settles — without letting that approval
+ * spread to a home directory or a system config.
+ *
+ * Deliberately coarse: a per-directory token would never accumulate enough
+ * evidence to settle, which is its own failure mode.
+ */
+export function outsideZone(abs: string): string {
+  const p = abs.replace(/\\/g, '/').toLowerCase();
+  if (/^([a-z]:)?\/(etc|private\/etc)\b/.test(p)) return 'etc';
+  if (/^([a-z]:)?\/(usr|opt|bin|sbin|lib)\b/.test(p)) return 'system';
+  if (/^([a-z]:)?\/(var|proc|sys|dev)\b/.test(p)) return 'runtime';
+  if (/\/(tmp|temp)\//.test(p) || /^([a-z]:)?\/tmp\b/.test(p)) return 'temp';
+  if (/^[a-z]:\/(windows|program files)/.test(p)) return 'system';
+  if (/\/(users|home)\//.test(p)) return 'home';
+  return 'other';
+}
+
+/**
+ * SQL statements keep their verb.
+ *
+ * `psql -c "SELECT 1"` and `psql -c "DROP TABLE users"` are both long strings
+ * with spaces, so both normalised to `<text>` and shared one identity —
+ * approving a select taught LeastGrant to allow a drop. The verb is the entire
+ * difference in risk, so it survives templating; the rest of the statement does
+ * not, which is what keeps `SELECT a` and `SELECT b` together.
+ */
+const SQL_VERB = /^\s*(?:\/\*.*?\*\/\s*)?(--[^\n]*\n\s*)*(select|insert|update|delete|drop|truncate|alter|create|grant|revoke|copy|call|do|merge|vacuum|reindex|attach|pragma)\b/i;
+
+export function sqlShape(arg: string): string | undefined {
+  const m = SQL_VERB.exec(arg);
+  return m?.[2] ? `<sql:${m[2].toLowerCase()}>` : undefined;
+}
+
+export function commandSignature(argv: string[], ctx: SignatureCtx): string {
+  if (!argv.length) return '(empty)';
+  const program = argv[0]!;
+  const flags: string[] = [];
+  const positional: string[] = [];
+
+  let sawDashDash = false;
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === '--' && !sawDashDash) {
+      sawDashDash = true;
+      continue;
+    }
+    if (!sawDashDash && a.startsWith('-') && a !== '-') {
+      const eq = a.indexOf('=');
+      if (eq > 0) {
+        flags.push(`${a.slice(0, eq)}=${normalizeArg(a.slice(eq + 1), ctx)}`);
+      } else {
+        flags.push(a);
+      }
+      continue;
+    }
+    positional.push(normalizeArg(a, ctx));
+  }
+
+  flags.sort();
+  return [program, ...positional, ...flags].join(' ');
+}
+
+/** Signature for a structured (non-shell) tool call. */
+export function toolSignature(tool: string, parts: string[]): string {
+  return parts.length ? `${tool}(${parts.join(', ')})` : tool;
+}
+
+/** Key names whose value must never be reproduced in a signature. */
+const SECRETISH_KEY =
+  /(?:token|secret|password|passwd|credential|api[_-]?key|^key$|auth|cookie|session[_-]?id|private|^value$|^val$|^data$|^payload$|^content$|^body$|^arg$|^args$|^input$)/i;
+
+/**
+ * MCP tools whose *name* says the arguments are sensitive, whatever the keys
+ * are called. `mcp__vault__get_secret({name, value})` has no credential-shaped
+ * key at all, and `value` held the secret.
+ */
+const SECRETISH_TOOL = /(?:secret|credential|password|token|vault|keychain|keyring|auth)/i;
+
+/**
+ * Values kept verbatim in an MCP signature.
+ *
+ * The tension here is real and does not have a clean answer. Keeping a short
+ * string means `mode=read` and `mode=write` are different learned things,
+ * which matters — collapsing them would let an approved read cover a write.
+ * But a short string can also be a password, and a signature is written to
+ * disk and never pruned from `denials.jsonl`.
+ *
+ * The compromise: keep only values shaped like an enum, meaning a single token
+ * that is entirely lower-case or entirely upper-case and no longer than
+ * sixteen characters. `write`, `read`, `DELETE`, `main`, `prod-db` survive.
+ * `mcpPLAINVALUE` and anything with a digit do not — mixed case and digits are
+ * what identifiers and secrets look like, and enums almost never do. Longer or
+ * higher-entropy values were already handled by `redact()` downstream.
+ *
+ * It is a heuristic, and `docs/privacy.md` says so rather than implying the
+ * signature is guaranteed clean.
+ */
+const ENUMISH = /^(?:[a-z][a-z_-]{0,15}|[A-Z][A-Z_]{1,15})$/;
+
+/**
+ * Key names that carry prose.
+ *
+ * Only ever consulted for a value that would otherwise be kept verbatim, so a
+ * `query` holding SQL still gets its verb and a `path` still gets its zone.
+ * Without this, `create_pr(title: "Another")` became a signature containing the
+ * word "Another" — a new learned identity per pull request, and a fragment of
+ * the user's content written into a file we ask them to read.
+ */
+const FREETEXT_KEY = /^(?:title|body|message|msg|description|desc|content|text|comment|summary|prompt|note|notes|reason|label|caption|question|answer)$/i;
+
+/**
+ * The argument shape of an MCP call.
+ *
+ * An MCP tool is a black box: LeastGrant cannot see the server's code, so the
+ * only things it has are the tool's name and the arguments the agent passed.
+ * For a long time the signature was the *name alone*, and that turned out to be
+ * the single widest collision in the system — `mcp__db__query` was one learned
+ * identity, so eleven approved `SELECT`s auto-approved a `DROP TABLE`, and
+ * `mcp__acme__get_document({})` auto-approved
+ * `mcp__acme__get_document({destructive: true})`.
+ *
+ * What goes in is the *shape*, not the data: sorted key names, each with a
+ * coarse description of its value. That keeps the identity stable across calls
+ * that differ only in which record they touch, while making a call that adds a
+ * parameter, or changes a SQL verb, or points at a different host, a different
+ * thing that has to earn its own approval.
+ *
+ * The one MCP-specific rule on top of `normalizeArg`: an identifier containing
+ * a digit collapses to `<id>`. Shell arguments keep such tokens verbatim, but
+ * MCP calls are overwhelmingly "do this to record ABC-123", and fragmenting per
+ * record id would mean a prompt for every ticket the agent ever opens. Words
+ * without digits — `write`, `force`, `DELETE`, `main` — are kept, because those
+ * are the enum-shaped arguments that actually change what the call does.
+ */
+export function mcpArgSignature(input: Record<string, unknown>, ctx: SignatureCtx, tool = ''): string {
+  const parts = shapeObject(input, ctx, 0, SECRETISH_TOOL.test(tool));
+  return parts.length ? `(${parts.join(', ')})` : '()';
+}
+
+function shapeObject(o: Record<string, unknown>, ctx: SignatureCtx, depth: number, allSecret = false): string[] {
+  const keys = Object.keys(o).sort();
+  const shown = keys.slice(0, 16);
+  const parts = shown.map(
+    (k) => `${k}=${shapeValue(o[k], ctx, depth, allSecret || SECRETISH_KEY.test(k), FREETEXT_KEY.test(k))}`,
+  );
+  if (keys.length > shown.length) parts.push(`+${keys.length - shown.length} more`);
+  return parts;
+}
+
+function shapeValue(v: unknown, ctx: SignatureCtx, depth: number, secretish: boolean, freetext = false): string {
+  if (v === null) return '<null>';
+  switch (typeof v) {
+    case 'undefined':
+      return '<null>';
+    case 'boolean':
+      // Kept verbatim: two possible values, and `force`/`destructive`/`dryRun`
+      // are exactly the arguments that decide what a call does.
+      return v ? '<true>' : '<false>';
+    case 'number':
+    case 'bigint':
+      return '<n>';
+    case 'function':
+    case 'symbol':
+      return '<opaque>';
+    case 'string': {
+      if (secretish) return '<redacted>';
+      const n = normalizeArg(v, ctx);
+      // `normalizeArg` returns the argument unchanged when it is a short
+      // identifier. For MCP that is usually a record id or, worse, a secret
+      // under an innocuous key — so only enum-shaped values survive.
+      if (n === v && freetext) return '<text>';
+      if (n === v && /\d/.test(v)) return '<id>';
+      if (n === v && !ENUMISH.test(v)) return '<text>';
+      return n;
+    }
+    default:
+      break;
+  }
+  if (Array.isArray(v)) {
+    if (!v.length) return '<list>';
+    if (depth >= 2) return '<list>';
+    // The element shape of the first entry, not every entry: a 500-item batch
+    // must not produce a 500-fragment signature.
+    return `<list of ${shapeValue(v[0], ctx, depth + 1, secretish, freetext)}>`;
+  }
+  if (depth >= 2) return '<obj>';
+  const inner = shapeObject(v as Record<string, unknown>, ctx, depth + 1);
+  return inner.length ? `{${inner.join(', ')}}` : '{}';
+}
+
+/**
+ * A coarser family key, used to answer "we have not seen this exact command,
+ * but we have seen a lot like it".
+ *
+ * `npm run build:prod` -> family `npm run`. Only ever used to *explain* a
+ * decision or to order suggestions — never to grant permission, because a
+ * family is exactly the kind of generalization an attacker would aim at.
+ */
+export function familyOf(signature: string): string {
+  const parts = signature.split(' ').filter((p) => !p.startsWith('-'));
+  if (parts.length <= 1) return parts[0] ?? signature;
+  const head = parts.slice(0, 2);
+  // Keep a third token when the second is a common dispatch word, so that
+  // `git remote add` does not collapse into `git remote`.
+  if (parts.length > 2 && /^(run|remote|config|stash|submodule|worktree|branch|tag|kv|state|secret)$/.test(parts[1]!)) {
+    head.push(parts[2]!);
+  }
+  return head.join(' ');
+}

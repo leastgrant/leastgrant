@@ -1,0 +1,68 @@
+{
+  "name": "leastgrant",
+  "version": "0.1.0",
+  "description": "Permissions that learn how you work. LeastGrant watches what your coding agents normally do, lets the routine flow, and stops the weird stuff.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "bin": {
+    "leastgrant": "./bin/leastgrant.js",
+    "lg": "./bin/leastgrant.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "bin/",
+    "dist/src/",
+    "src/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+    "THREAT-MODEL.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "RELEASING.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --test --test-reporter=spec \"dist/test/**/*.test.js\"",
+    "test:fast": "node --test --test-reporter=dot \"dist/test/**/*.test.js\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build && npm test",
+    "release:check": "node scripts/release-rehearsal.mjs"
+  },
+  "keywords": [
+    "ai-agent",
+    "permissions",
+    "security",
+    "least-privilege",
+    "claude-code",
+    "codex",
+    "cursor",
+    "mcp",
+    "guardrails",
+    "agent-safety",
+    "hooks"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leastgrant/leastgrant.git"
+  },
+  "homepage": "https://github.com/leastgrant/leastgrant#readme",
+  "bugs": {
+    "url": "https://github.com/leastgrant/leastgrant/issues"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "types": "./dist/src/index.d.ts"
+}

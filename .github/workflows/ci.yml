@@ -1,0 +1,24 @@
+# Ordinary CI: the same verification a release runs, on every push and PR.
+#
+# The job list lives in `verify.yml` so that this and `release.yml` cannot drift
+# apart. If you want to add a check, add it there and both get it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  # One run per branch or PR; a newer push makes an older run pointless.
+  # `release.yml` deliberately does the opposite.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    permissions:
+      contents: read

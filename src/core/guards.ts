@@ -1,0 +1,309 @@
+/**
+ * Hard floors.
+ *
+ * These are the rules learning can never unlock. Every other part of
+ * LeastGrant is a heuristic that gets better as it watches you; this file is
+ * the part that does not move. It exists so there is something we can describe
+ * to a user without hedging.
+ *
+ * Floors are strictly one-directional: they can turn an `allow` into an `ask`,
+ * or an `ask` into a `deny`. Nothing here can make an action *more* permitted.
+ * That asymmetry is what makes slow-escalation attacks structurally impossible
+ * rather than statistically unlikely — there is no amount of patient, boring,
+ * approved behaviour that adds up to permission to read `~/.ssh/id_rsa`.
+ *
+ * Keep this file boring, short, and readable. If you cannot explain a guard to
+ * a working developer in one sentence, it does not belong here.
+ */
+
+import * as path from 'node:path';
+import type { Action, Decision } from './types.js';
+import { canonicalDir, isInside } from './paths.js';
+
+export interface GuardCtx {
+  /** Canonical workspace roots. */
+  roots: string[];
+  /** Directory holding LeastGrant's own state. */
+  stateDir: string;
+  /** True when the tool call could not be fully parsed. */
+  understood: boolean;
+  /** Wrapper tags collected while unwrapping, e.g. `privilege`, `shell-eval`. */
+  wrapperTags: string[];
+  /** Whether the previous commands in this pipeline fetched something. */
+  pipedFromNetwork: boolean;
+}
+
+export interface GuardHit {
+  id: string;
+  decision: Extract<Decision, 'ask' | 'deny'>;
+  /** One sentence, addressed to the developer. */
+  text: string;
+}
+
+/**
+ * Files that cause code to run later, outside any agent session.
+ *
+ * Writing one of these is how a mistake becomes permanent and how a compromise
+ * survives closing the terminal. Individually they are ordinary files a
+ * developer edits by hand; the point is only that an *agent* should not edit
+ * them without being noticed.
+ */
+const PERSISTENCE_FILES = [
+  '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile',
+  '.zshrc', '.zprofile', '.zshenv', '.zlogin',
+  '.envrc', '.direnvrc',
+  '.gitconfig', '.gitmodules',
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs', '.pnp.cjs', 'bunfig.toml',
+  '.pre-commit-config.yaml', '.bazelrc',
+  'crontab',
+];
+
+const PERSISTENCE_DIRS = [
+  '.git/hooks',
+  '.husky',
+  '.vscode',
+  '.idea',
+  '.devcontainer',
+  '.config/systemd',
+  '.config/autostart',
+  'library/launchagents',
+  'library/launchdaemons',
+  '/etc/systemd/system',
+  '/etc/cron.d',
+  '/etc/init.d',
+  'appdata/roaming/microsoft/windows/start menu/programs/startup',
+];
+
+/**
+ * Configuration that decides whether LeastGrant runs at all, or what any agent
+ * is allowed to do. An agent editing these is editing its own restraints.
+ */
+const CONTROL_FILES = [
+  // Files that steer an agent, a CI run, or the toolchain. Editing one of these
+  // arranges for something else to run later, under someone else's authority —
+  // the same reason `.bashrc` is floored, one level up.
+  '.github/workflows',
+  '.gitlab-ci.yml',
+  '.circleci/config.yml',
+  'azure-pipelines.yml',
+  '.git/config',
+  '.mcp.json',
+  '.vscode/tasks.json',
+  '.vscode/launch.json',
+  '.devcontainer/devcontainer.json',
+  // Lower-case, like every other entry: `isControlFile` folds the path before
+  // comparing, so a capitalised entry here can never match anything. These two
+  // were dead for exactly that reason — the instruction files that steer every
+  // future agent session were the only control files not actually guarded.
+  'agents.md',
+  'claude.md',
+  '.cursorrules',
+  // Slash commands and subagent definitions are prompts an agent will later
+  // execute as instructions — editing one steers every future session.
+  '.claude/commands',
+  '.claude/agents',
+  '.claude/skills',
+  '.claude/settings.local.json',
+  // package.json carries the scripts that `npm test` and friends run, so an
+  // edit here is an edit to what a later approved command will execute.
+  'package.json',
+  '.aider.conf.yml',
+  '.claude/settings.json',
+  '.claude/settings.local.json',
+  '.claude/hooks',
+  '.cursor/hooks.json',
+  '.cursor/cli.json',
+  '.codex/config.toml',
+  '.gemini/settings.json',
+  '.copilot/hooks',
+  '.github/hooks',
+  '.leastgrant/config.json',
+  'managed-settings.json',
+];
+
+const isControlFile = (abs: string): boolean => {
+  const p = abs.replace(/\\/g, '/').toLowerCase();
+  return CONTROL_FILES.some((c) => p.endsWith('/' + c) || p.includes('/' + c + '/'));
+};
+
+const isPersistence = (abs: string): boolean => {
+  const p = abs.replace(/\\/g, '/').toLowerCase();
+  const base = path.posix.basename(p);
+  if (PERSISTENCE_FILES.includes(base)) return true;
+  return PERSISTENCE_DIRS.some((d) => p.includes('/' + d + '/') || p.endsWith('/' + d) || p.includes(d + '/'));
+};
+
+/**
+ * Evaluate every floor against an action. Returns all hits, worst first, so the
+ * explanation can mention more than one reason when more than one applies.
+ */
+export function checkGuards(action: Action, ctx: GuardCtx): GuardHit[] {
+  const hits: GuardHit[] = [];
+  const add = (id: string, decision: 'ask' | 'deny', text: string) => hits.push({ id, decision, text });
+
+  // --- LeastGrant's own integrity -----------------------------------------
+  // An agent in bypass mode can write anywhere, including to the hook config
+  // that installs us. Removing the seatbelt must not itself be a quiet action.
+  //
+  // The state directory is canonicalized here because targets already are, and
+  // comparing a resolved path against an unresolved boundary silently answers
+  // "no" — which for this particular guard would mean an agent could edit
+  // LeastGrant's own records unchallenged.
+  const stateRoot = canonicalDir(ctx.stateDir);
+  for (const t of action.targets) {
+    if (t.type !== 'path' || !t.value) continue;
+    if (isInside(t.value, stateRoot)) {
+      if (action.kind !== 'file.read') {
+        add(
+          'guard.self-write',
+          'deny',
+          "this would modify LeastGrant's own records, which it does not allow — run leastgrant commands directly instead",
+        );
+      }
+    } else if (isControlFile(t.value) && action.kind !== 'file.read') {
+      add(
+        'guard.agent-config',
+        'ask',
+        'this edits the configuration that decides what agents are allowed to do, including the hook that runs these checks',
+      );
+    }
+  }
+
+  // --- credentials ---------------------------------------------------------
+  if (action.blast.exposure === 'reads-secrets' || action.capability === 'secret.read') {
+    const which = action.targets.find((t) => t.secret);
+    // "reads" is wrong for a write. `Write ~/.claude/settings.json` was
+    // reported as "this reads … which holds credentials", which describes the
+    // wrong action and undersells it: overwriting a credential file is worse
+    // than reading one.
+    const verb = action.capability.startsWith('fs.write') || action.kind === 'file.write' || action.kind === 'file.edit'
+      ? 'writes to'
+      : 'reads';
+    add(
+      'guard.secret-read',
+      'ask',
+      which
+        ? `this ${verb} ${short(which.value)}, which holds credentials`
+        : 'this reads something that holds credentials',
+    );
+  }
+  if (action.blast.exposure === 'can-exfiltrate') {
+    add(
+      'guard.exfiltrate',
+      'ask',
+      'this sends data off the machine, so anything it can read it can also leak',
+    );
+  }
+
+  // --- writing outside the workspace --------------------------------------
+  //
+  // Keyed on the target, not on the capability.
+  //
+  // Keying it on the capability meant the floor only fired for programs the
+  // knowledge base had already labelled as writing outside — which is precisely
+  // the judgement being checked. Anything that named its destination in a flag
+  // slipped past: `curl -o /etc/cron.d/x`, `wget --save-cookies ~/.bashrc`,
+  // `tar --directory /etc`, `git -C /elsewhere commit`, `find / -exec chmod`.
+  //
+  // Reads are excluded and stay learnable: fetching `/usr/share/dict/words`
+  // every build is ordinary, and its region-scoped signature already keeps that
+  // trust from spreading. Everything else that reaches outside the project asks.
+  const READ_ONLY: ReadonlySet<string> = new Set([
+    'fs.read.workspace',
+    'fs.read.outside',
+    'exec.inspect',
+    'exec.vcs.read',
+    'meta',
+  ]);
+  if (!READ_ONLY.has(action.capability)) {
+    const outside = action.targets.filter((t) => t.type === 'path' && t.value && t.inWorkspace === false);
+    if (outside.length) {
+      add(
+        'guard.write-outside',
+        'ask',
+        `this reaches ${short(outside[0]!.value)}, which is outside the project`,
+      );
+    }
+  }
+
+  // --- persistence ---------------------------------------------------------
+  if (action.kind === 'file.write' || action.kind === 'file.edit' || action.capability === 'fs.write.workspace' || action.capability === 'fs.write.outside') {
+    const p = action.targets.find((t) => t.type === 'path' && t.value && isPersistence(t.value));
+    if (p) {
+      add(
+        'guard.persistence',
+        'ask',
+        `this edits ${short(p.value)}, which runs automatically later — outside any agent session`,
+      );
+    }
+  }
+  if (action.capability === 'exec.process' && /crontab|schtasks|systemctl|launchctl|\bat\b|reg\b/.test(action.display)) {
+    if (/crontab|schtasks|launchctl (load|bootstrap)|systemctl (enable|--user enable)|reg (add|import)/.test(action.display)) {
+      add(
+        'guard.persistence',
+        'ask',
+        'this schedules something to run later, outside any agent session',
+      );
+    }
+  }
+
+  // --- privilege -----------------------------------------------------------
+  if (ctx.wrapperTags.includes('privilege') || action.capability === 'exec.privilege') {
+    add('guard.privilege', 'ask', 'this runs with elevated privileges');
+  }
+
+  // --- executing fetched content ------------------------------------------
+  if (ctx.pipedFromNetwork) {
+    add(
+      'guard.pipe-to-shell',
+      'ask',
+      'this runs code that was just downloaded, so what it does depends on what the server sent back',
+    );
+  }
+  if (ctx.wrapperTags.includes('pkg-fetch-run')) {
+    add(
+      'guard.fetch-run',
+      'ask',
+      'this can download a package and run it in one step',
+    );
+  }
+
+  // --- irreversible and far-reaching --------------------------------------
+  if (action.blast.reach === 'production') {
+    // Reach 'production' covers both a resource literally named prod and a
+    // shared branch everyone pulls from, so the wording has to fit both. The
+    // specifics come from the knowledge module's own note, which is printed
+    // directly above this line.
+    add('guard.production', 'ask', 'this affects something other people depend on');
+  }
+  if (action.capability === 'exec.pkg.publish') {
+    add('guard.publish', 'ask', 'publishing is public and cannot be taken back');
+  }
+  if (action.blast.reversibility === 'irreversible' && action.blast.reach !== 'workspace') {
+    add('guard.irreversible', 'ask', 'this cannot be undone');
+  }
+
+  // --- we did not understand it -------------------------------------------
+  if (!ctx.understood || !action.understood) {
+    add(
+      'guard.not-understood',
+      'ask',
+      'LeastGrant could not fully account for what this command does, and it only auto-approves things it understands',
+    );
+  }
+
+  return hits.sort((a, b) => (a.decision === 'deny' ? -1 : 0) - (b.decision === 'deny' ? -1 : 0));
+}
+
+/** The strongest decision implied by a set of guard hits, if any. */
+export function guardDecision(hits: GuardHit[]): Decision | null {
+  if (hits.some((h) => h.decision === 'deny')) return 'deny';
+  if (hits.length) return 'ask';
+  return null;
+}
+
+function short(p: string): string {
+  const norm = p.replace(/\\/g, '/');
+  const parts = norm.split('/');
+  return parts.length > 3 ? '…/' + parts.slice(-3).join('/') : norm;
+}

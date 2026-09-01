@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.leastgrant/
+*.log
+coverage/
+.env
+.env.*
+
+# Scratch from the build process, not part of the project
+.workflows/
+.research/
+.audit/
+
+# Local `npm pack` output. Never commit a build artifact.
+*.tgz

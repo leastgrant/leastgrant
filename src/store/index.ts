@@ -1,0 +1,382 @@
+/**
+ * On-disk state.
+ *
+ * Three files, all plain text, all readable with `cat`:
+ *
+ *   config.json            what you told LeastGrant to do
+ *   ledger.jsonl           every decision, append-only
+ *   envelopes/<key>.json   what it has learned, per project
+ *
+ * The ledger is deliberately not a database. It is the audit trail, the
+ * training data, and the input to `leastgrant simulate` all at once, and a
+ * security tool whose data you cannot read is a worse security tool. Every
+ * line is written through the redactor first.
+ *
+ * Concurrency: several agent sessions can be running at once. Each ledger entry
+ * is written as a single `appendFileSync` of one line, which is atomic enough
+ * for this purpose on both POSIX (O_APPEND) and Windows. We deliberately do not
+ * hash-chain the log — that would require a single writer, and a lock that can
+ * wedge an agent mid-session is a worse failure than a log you cannot prove is
+ * complete. The threat model says so out loud rather than implying tamper-
+ * evidence we do not have.
+ */
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import type { Config, Envelope, LedgerEntry, Rule, Scope } from '../core/types.js';
+import { NIL_BLAST } from '../core/types.js';
+import { newEnvelope, safeSignatureKey } from '../core/envelope.js';
+import { DEFAULT_THRESHOLDS } from '../core/envelope.js';
+import { redact } from '../core/secrets.js';
+
+export function stateDir(): string {
+  const override = process.env['LEASTGRANT_HOME'];
+  if (override) return path.resolve(override);
+  return path.join(os.homedir(), '.leastgrant');
+}
+
+export const paths = {
+  root: stateDir,
+  config: () => path.join(stateDir(), 'config.json'),
+  ledger: () => path.join(stateDir(), 'ledger.jsonl'),
+  envelopes: () => path.join(stateDir(), 'envelopes'),
+  envelope: (key: string) => path.join(stateDir(), 'envelopes', `${hashKey(key)}.json`),
+  log: () => path.join(stateDir(), 'leastgrant.log'),
+  denials: () => path.join(stateDir(), 'denials.jsonl'),
+};
+
+export function hashKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+function ensureDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_CONFIG: Config = {
+  version: 1,
+  posture: 'assist',
+  thresholds: DEFAULT_THRESHOLDS,
+  rules: [],
+  additionalRoots: [],
+  secretPatterns: [],
+  telemetry: { ledger: true },
+};
+
+export function loadConfig(): Config {
+  try {
+    const raw = fs.readFileSync(paths.config(), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<Config>;
+    return {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      thresholds: { ...DEFAULT_THRESHOLDS, ...(parsed.thresholds ?? {}) },
+      rules: parsed.rules ?? [],
+      additionalRoots: parsed.additionalRoots ?? [],
+      secretPatterns: parsed.secretPatterns ?? [],
+      telemetry: { ...DEFAULT_CONFIG.telemetry, ...(parsed.telemetry ?? {}) },
+    };
+  } catch {
+    return { ...DEFAULT_CONFIG, thresholds: { ...DEFAULT_THRESHOLDS }, rules: [] };
+  }
+}
+
+export function saveConfig(config: Config): void {
+  ensureDir(stateDir());
+  writeAtomic(paths.config(), JSON.stringify(config, null, 2) + '\n');
+}
+
+export function addRule(config: Config, rule: Rule): Config {
+  // A rule pattern is matched against a signature, and signatures are scrubbed
+  // of credential shapes on their way out of `analyze()`. So a rule containing
+  // a raw password could never match anything — it would sit in a plain-text
+  // config file leaking the secret and doing nothing. Scrubbing it here makes
+  // it both harmless and, for the first time, capable of matching.
+  const scrubbed: Rule = { ...rule, match: redact(rule.match) };
+  // Replace an existing rule with the same match+scope rather than stacking.
+  const rules = config.rules.filter(
+    (r) => !(r.match === scrubbed.match && r.scope === scrubbed.scope && r.key === scrubbed.key),
+  );
+  rules.push(scrubbed);
+  const next = { ...config, rules };
+  saveConfig(next);
+  return next;
+}
+
+export function removeRule(config: Config, match: string, scope?: Scope): Config {
+  const rules = config.rules.filter((r) => !(r.match === match && (!scope || r.scope === scope)));
+  const next = { ...config, rules };
+  saveConfig(next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Envelopes
+// ---------------------------------------------------------------------------
+
+/**
+ * Append a refusal to the durable journal.
+ *
+ * The envelope is a cache of what has been learned and can be rebuilt. This
+ * file is the record of what was refused, and it is the one thing that must
+ * survive a corrupt envelope, a lost race, or a hand edit — because "a no does
+ * not expire" is a promise the product makes in plain words.
+ */
+function recordDenial(scope: Scope, key: string, signature: string, at: number): void {
+  try {
+    ensureDir(stateDir());
+    fs.appendFileSync(
+      paths.denials(),
+      JSON.stringify({ v: 1, scope, key, signature, at }) + '\n',
+      'utf8',
+    );
+  } catch {
+    /* the envelope still carries it; this is the belt to that pair of braces */
+  }
+}
+
+/** Replay the journal over an envelope, so refusals outlive the envelope. */
+function applyDenials(env: Envelope): Envelope {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(paths.denials(), 'utf8');
+  } catch {
+    return env;
+  }
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let rec: { scope?: Scope; key?: string; signature?: string; at?: number };
+    try {
+      rec = JSON.parse(line) as typeof rec;
+    } catch {
+      continue;
+    }
+    if (rec.scope !== env.scope || rec.key !== env.key || !rec.signature) continue;
+    const sig = safeSignatureKey(rec.signature);
+    const existing = env.signatures[sig];
+    if (existing) {
+      if (existing.denied < 1) existing.denied = 1;
+      continue;
+    }
+    // The envelope no longer remembers the action at all, but the refusal
+    // stands. A minimal record is enough: canPromote() checks `denied` before
+    // it looks at anything else.
+    env.signatures[sig] = {
+      signature: rec.signature,
+      capability: 'exec.unknown',
+      confirmed: 0,
+      denied: 1,
+      observed: 0,
+      totalSeen: 1,
+      firstSeen: rec.at ?? 0,
+      lastSeen: rec.at ?? 0,
+      sessions: 0,
+      days: 0,
+      worstBlast: NIL_BLAST,
+      samples: [],
+    };
+  }
+  return env;
+}
+
+export function loadEnvelope(scope: Scope, key: string): Envelope {
+  const file = scope === 'global' ? path.join(stateDir(), 'global.json') : paths.envelope(key);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Envelope;
+    // Defend against a truncated or hand-edited file rather than crashing the
+    // hook — a broken envelope must degrade to "I know nothing", never to
+    // "everything is allowed".
+    if (!parsed || typeof parsed !== 'object' || !parsed.signatures) return applyDenials(newEnvelope(scope, key));
+    // Rebuild the maps without a prototype. JSON.parse produces ordinary
+    // objects, so a stored key of `__proto__` is reachable through the
+    // prototype chain — and this file is plain text the docs invite people to
+    // read and edit. Values are shape-checked on the way in for the same reason.
+    const clean = newEnvelope(scope, key);
+    clean.updatedAt = Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
+    clean.events = Number.isFinite(parsed.events) ? parsed.events : 0;
+    for (const [k, v] of Object.entries(parsed.signatures ?? {})) {
+      if (v && typeof v === 'object') clean.signatures[k] = v;
+    }
+    for (const [k, v] of Object.entries(parsed.transitions ?? {})) {
+      if (typeof v === 'number' && Number.isFinite(v)) clean.transitions[k] = v;
+    }
+    for (const [k, v] of Object.entries(parsed.capabilities ?? {})) {
+      if (typeof v === 'number' && Number.isFinite(v)) clean.capabilities[k] = v;
+    }
+    return applyDenials(clean);
+  } catch {
+    return applyDenials(newEnvelope(scope, key));
+  }
+}
+
+/**
+ * Merge an envelope with whatever is already on disk.
+ *
+ * Several agent sessions run at once, each loading, mutating and saving. A
+ * plain overwrite means the last writer silently discards the others' evidence.
+ * For approvals that is a lost count; for a DENIAL it is a security regression,
+ * because denials are permanent by design and are the one signal a user cannot
+ * cheaply re-assert.
+ *
+ * So the merge is monotone in the direction of caution: denials take the
+ * maximum of both sides, grants survive from either, and counts take the
+ * larger. Two concurrent writers can lose an approval; neither can lose a no.
+ */
+function mergeEnvelopes(disk: Envelope, mine: Envelope): Envelope {
+  const out: Envelope = {
+    ...mine,
+    signatures: { ...disk.signatures },
+    transitions: { ...disk.transitions },
+    capabilities: { ...disk.capabilities },
+    events: Math.max(disk.events ?? 0, mine.events ?? 0),
+  };
+  for (const [sig, m] of Object.entries(mine.signatures)) {
+    const d = disk.signatures[sig];
+    if (!d) {
+      out.signatures[sig] = m;
+      continue;
+    }
+    out.signatures[sig] = {
+      ...m,
+      denied: Math.max(d.denied ?? 0, m.denied ?? 0),
+      confirmed: Math.max(d.confirmed ?? 0, m.confirmed ?? 0),
+      observed: Math.max(d.observed ?? 0, m.observed ?? 0),
+      totalSeen: Math.max(d.totalSeen ?? 0, m.totalSeen ?? 0),
+      days: Math.max(d.days ?? 0, m.days ?? 0),
+      sessions: Math.max(d.sessions ?? 0, m.sessions ?? 0),
+      firstSeen: Math.min(d.firstSeen || m.firstSeen, m.firstSeen || d.firstSeen),
+      lastSeen: Math.max(d.lastSeen ?? 0, m.lastSeen ?? 0),
+      ...(d.grantedAt || m.grantedAt ? { grantedAt: d.grantedAt ?? m.grantedAt } : {}),
+    };
+  }
+  for (const [k, v] of Object.entries(mine.transitions)) {
+    out.transitions[k] = Math.max(disk.transitions[k] ?? 0, v);
+  }
+  for (const [k, v] of Object.entries(mine.capabilities)) {
+    out.capabilities[k] = Math.max(disk.capabilities[k] ?? 0, v);
+  }
+  return out;
+}
+
+export function saveEnvelope(env: Envelope): void {
+  const file = env.scope === 'global' ? path.join(stateDir(), 'global.json') : paths.envelope(env.key);
+  ensureDir(path.dirname(file));
+  // Re-read immediately before writing and merge, so a concurrent session's
+  // evidence — in particular its denials — is not overwritten.
+  for (const [sig, stat] of Object.entries(env.signatures)) {
+    if ((stat?.denied ?? 0) > 0) recordDenial(env.scope, env.key, stat.signature || sig, stat.lastSeen ?? 0);
+  }
+  const disk = loadEnvelope(env.scope, env.key);
+  const merged = disk.events || Object.keys(disk.signatures).length ? mergeEnvelopes(disk, env) : env;
+  writeAtomic(file, JSON.stringify(merged));
+}
+
+/** Every project envelope on disk, for `leastgrant status --all`. */
+export function listEnvelopes(): Envelope[] {
+  const dir = paths.envelopes();
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const out: Envelope[] = [];
+  for (const n of names) {
+    try {
+      out.push(JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as Envelope);
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Ledger
+// ---------------------------------------------------------------------------
+
+/** Append one decision. Never throws: logging must not break the agent. */
+export function appendLedger(entry: LedgerEntry): void {
+  try {
+    ensureDir(stateDir());
+    const safe: LedgerEntry = { ...entry, display: redact(entry.display) };
+    fs.appendFileSync(paths.ledger(), JSON.stringify(safe) + '\n', 'utf8');
+  } catch {
+    /* a full disk must not stop the agent working */
+  }
+}
+
+export interface ReadLedgerOptions {
+  /** Only entries at or after this time. */
+  since?: number;
+  /** Only this project. */
+  project?: string;
+  /** Cap the number returned, taking the most recent. */
+  limit?: number;
+}
+
+export function readLedger(opts: ReadLedgerOptions = {}): LedgerEntry[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(paths.ledger(), 'utf8');
+  } catch {
+    return [];
+  }
+  const out: LedgerEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let e: LedgerEntry;
+    try {
+      e = JSON.parse(line) as LedgerEntry;
+    } catch {
+      continue; // a partially-written final line is expected, not an error
+    }
+    if (opts.since && e.at < opts.since) continue;
+    if (opts.project && e.project !== opts.project) continue;
+    out.push(e);
+  }
+  if (opts.limit && out.length > opts.limit) return out.slice(-opts.limit);
+  return out;
+}
+
+/**
+ * Trim the ledger to a maximum age, keeping the file from growing without
+ * bound. Called opportunistically by the CLI, never by the hook.
+ */
+export function pruneLedger(maxAgeDays: number): number {
+  const cutoff = Date.now() - maxAgeDays * 86_400_000;
+  const kept = readLedger().filter((e) => e.at >= cutoff);
+  const all = readLedger();
+  if (kept.length === all.length) return 0;
+  writeAtomic(paths.ledger(), kept.map((e) => JSON.stringify(e)).join('\n') + (kept.length ? '\n' : ''));
+  return all.length - kept.length;
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Write via a temp file and rename, so a crash mid-write cannot leave a
+ * half-parsed config or envelope behind.
+ */
+function writeAtomic(file: string, contents: string): void {
+  ensureDir(path.dirname(file));
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, contents, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+/** Diagnostic log, used when the hook cannot speak to the user any other way. */
+export function logLine(msg: string): void {
+  try {
+    ensureDir(stateDir());
+    fs.appendFileSync(paths.log(), `${new Date().toISOString()} ${redact(msg)}\n`, 'utf8');
+  } catch {
+    /* ignore */
+  }
+}

@@ -1,0 +1,167 @@
+# The single definition of "is this tree good?".
+#
+# Called by `ci.yml` on every push and pull request, and by `release.yml` before
+# anything is published. That reuse is the point: a release must not be able to
+# pass a weaker set of checks than an ordinary pull request, and two copies of
+# the same job list would drift apart within a month.
+#
+# Nothing here has any write permission, and nothing here touches a registry.
+name: Verify
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to verify. Defaults to whatever triggered the caller.
+        type: string
+        required: false
+        default: ''
+      # A release checks out a tag and must not reuse a dependency cache that a
+      # pull request populated. Ordinary CI can and should use one.
+      use-cache:
+        description: Allow the npm cache. Releases pass false.
+        type: boolean
+        required: false
+        default: true
+
+permissions: {}
+
+jobs:
+  # A permission tool has to behave the same on every platform its users have,
+  # because path containment is exactly where the platforms differ: 8.3 short
+  # names and NTFS alternate data streams on Windows, case-insensitive
+  # comparison on macOS, symlinks and physical `..` everywhere else.
+  test:
+    name: test ${{ matrix.os }} node${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20', '22', '24']
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: ${{ inputs.use-cache && 'npm' || '' }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  # The bypass corpus is the one suite whose failure is a security regression
+  # rather than a bug, so it gets its own job and its own red X.
+  bypass:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: ${{ inputs.use-cache && 'npm' || '' }}
+      - run: npm ci
+      - run: npm run build
+      - name: No bypass may be auto-approved
+        run: node --test --test-reporter=spec dist/test/bypass.test.js
+      - name: No symlink traversal may read as contained
+        run: node --test --test-reporter=spec dist/test/symlink-traversal.test.js
+
+  # Path containment is the one piece of logic where being wrong is silent: a
+  # path that reads as inside the project is simply allowed, with no error
+  # anywhere. The checked-in tests cover the shapes we thought of; this covers
+  # the ones we did not, by generating random symlink topologies and comparing
+  # against a reference resolver written independently of the one under test.
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: ${{ inputs.use-cache && 'npm' || '' }}
+      - run: npm ci
+      - run: npm run build
+      - name: Randomised symlink topologies
+        run: node scripts/fuzz-paths.mjs
+
+  dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      # LeastGrant sits in the permission path of a coding agent. Every runtime
+      # dependency is third-party code that would sit there too, so there are
+      # none, and this job keeps it that way.
+      - name: Zero runtime dependencies
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies || {}).length")
+          echo "runtime dependencies: $count"
+          if [ "$count" != "0" ]; then
+            echo "::error::LeastGrant must have zero runtime dependencies; found $count"
+            exit 1
+          fi
+
+  # What a stranger actually receives. The audit found three problems that were
+  # invisible from the source tree and existed only in the artifact: a dead
+  # `exports` map that made the package unimportable, the author's username in a
+  # comment, and scratch directories nearly shipped.
+  #
+  # Run on every OS the project supports, because the tarball is built by
+  # whichever machine cuts the release, and the paths that could leak from a
+  # Windows working copy look nothing like the ones from Ubuntu.
+  package:
+    name: package ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: ${{ inputs.use-cache && 'npm' || '' }}
+      - run: npm ci
+      - run: npm run build
+      - name: Pack
+        shell: bash
+        run: npm pack --pack-destination "${RUNNER_TEMP}"
+      - name: Inspect the artifact
+        shell: bash
+        run: node scripts/verify-tarball.mjs "${RUNNER_TEMP}"/leastgrant-*.tgz
+      - name: Install it into an empty directory and use it
+        shell: bash
+        run: node scripts/smoke-tarball.mjs "${RUNNER_TEMP}"/leastgrant-*.tgz
