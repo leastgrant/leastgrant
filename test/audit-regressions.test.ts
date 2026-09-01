@@ -911,21 +911,47 @@ describe('every path into a command reaches the resolver', () => {
     }
   });
 
-  test('an attached short-flag value with a drive letter is resolved', () => {
-    // `/ ~ .` were admitted but `C:` was not, so the attached spelling of a
-    // flag read as project-local while the detached spelling read as outside.
+  /** Every attached flag value must reach the resolver and land outside. */
+  function attachedFlagResolves(cmd: string) {
+    const v = verdict(env, { tool: 'Bash', input: { command: cmd } });
+    assert.ok(
+      v.action.targets.some((t) => t.inWorkspace === false),
+      `the flag value never resolved: ${v.action.signature}`,
+    );
+    assert.notEqual(v.decision, 'allow', cmd + ' -> ' + v.headline);
+  }
+
+  test('an attached short-flag value is resolved', () => {
+    // A rooted value, absolute on every platform: on Windows a leading slash
+    // resolves against the current drive, which is still outside the project.
+    for (const cmd of ['unzip a.zip -d/etc/cron.d', '7z x a.7z -o/etc/cron.d', 'tar -C/etc -xf a.tar']) {
+      attachedFlagResolves(cmd);
+    }
+  });
+
+  // Windows only.  is absolute there, and a regex admitting
+  //  but not a drive letter is exactly what this regression was. To
+  // POSIX the same string is a *relative* path into a directory named ,
+  // which genuinely is inside the project — asserting otherwise everywhere is
+  // how this failed on every Linux and macOS runner.
+  test('a drive-letter flag value is resolved', { skip: !WIN_PLATFORM }, () => {
     for (const cmd of [
       'unzip a.zip -dC:/Windows/Temp',
       '7z x a.7z -oC:/Windows/System32',
       'tar -CC:/Users/someone -xf a.tar',
     ]) {
-      const v = verdict(env, { tool: 'Bash', input: { command: cmd } });
-      assert.ok(
-        v.action.targets.some((t) => t.inWorkspace === false),
-        `the flag value never resolved: ${v.action.signature}`,
-      );
-      assert.notEqual(v.decision, 'allow', `${cmd}\n  ${v.headline}`);
+      attachedFlagResolves(cmd);
     }
+  });
+
+  test('and a drive-letter value is still extracted from the flag', () => {
+    // The platform-independent half: whatever it resolves to, the value must
+    // be pulled out of the attached flag rather than dropped on the floor.
+    const a = analyze(
+      { agent: 't', tool: 'Bash', input: { command: 'unzip a.zip -dC:/Windows/Temp' }, cwd: WS, sessionId: 's', at: AT },
+      CTX,
+    ).actions[0]!;
+    assert.ok(a.targets.length >= 1, `no target was extracted: ${a.signature}`);
   });
 
   test('a Glob pattern is resolved, not just its path argument', () => {
