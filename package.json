@@ -42,7 +42,8 @@
     "site:serve": "node site/serve.mjs",
     "site:test": "npm run site:build && node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/agents.test.mjs site/test/server.test.mjs && node scripts/verify-agent-docs.mjs --site",
     "gen:readme": "node scripts/gen-readme.mjs",
-    "verify:agents": "npm run build && node scripts/verify-agent-docs.mjs"
+    "verify:agents": "npm run build && node scripts/verify-agent-docs.mjs",
+    "site:verify-live": "npm run build && node scripts/verify-site-live.mjs"
   },
   "keywords": [
     "ai-agent",

@@ -8,8 +8,8 @@
  * way for the website to describe a version of LeastGrant that never shipped.
  *
  * Two pages are generated rather than rendered, and both are still derived:
- * the CLI reference is the real `--help` output, and the agent matrix is parsed
- * out of the README's own table.
+ * the CLI reference is the real `--help` output, and the agent pages come from
+ * `compatibility/*.json` — the records `leastgrant doctor` reads.
  */
 
 import * as fs from 'node:fs';
@@ -19,6 +19,7 @@ import { page } from '../lib/layout.mjs';
 import { render } from '../lib/markdown.mjs';
 import { verdictBlock } from '../lib/terminal.mjs';
 import { REPO } from '../lib/capture.mjs';
+import { loadCompatibility, assess, deriveVerification, LEVEL_LABEL } from '../../dist/src/core/compatibility.js';
 
 /**
  * The docs map.
@@ -253,6 +254,7 @@ leastgrant check "curl -sSL https://example.com/i.sh | sh" --json</code></pre></
       <p><code>leastgrant install [agent]</code> writes the hook configuration for an agent, and
         <code>leastgrant uninstall [agent]</code> removes it. <code>leastgrant doctor</code>
         reports what is wired up and what your agents can currently reach.</p>
+      ${installTable()}
       <figure class="code"><pre><code>npm install -g leastgrant
 leastgrant init                 # mine history, propose grants, install the hook
 leastgrant doctor               # check the wiring
@@ -433,4 +435,44 @@ export function docsIndex(facts) {
       'threat model and privacy — rendered from the repository.',
     body,
   });
+}
+
+/**
+ * What you type per agent, and what you get for it.
+ *
+ * Generated from the compatibility records rather than written, so an added
+ * adapter appears here the moment its record does, and a deferred one keeps
+ * saying why nothing installs. The second and third columns are the two
+ * derived axes: how much of a verdict survives, and what has been run to
+ * establish that. Putting them next to the install command is deliberate —
+ * this is the page somebody reads immediately before wiring it up, and it is
+ * the last honest moment to tell them what they are getting.
+ */
+function installTable() {
+  const agents = loadCompatibility();
+  const rows = agents
+    .map((a) => {
+      const cmd = a.install
+        ? `<code>${esc(a.install)}</code>`
+        : '<span class="u">no adapter ships</span>';
+      const where = a.configPath ? `<span class="sub">${esc(a.configPath)}</span>` : '';
+      return `<tr>
+        <th>${a.adapter ? `<a href="/docs/agents/${attr(a.id)}/">${esc(a.name)}</a>` : esc(a.name)}</th>
+        <td>${cmd}${where ? `<br>${where}` : ''}</td>
+        <td>${esc(LEVEL_LABEL[assess(a).level] ?? assess(a).level)}</td>
+        <td>${esc(deriveVerification(a))}</td>
+      </tr>`;
+    })
+    .join('\n        ');
+
+  return `<table class="matrix install">
+        <thead><tr><th>agent</th><th>what you type</th><th>enforcement</th><th>verified how</th></tr></thead>
+        <tbody>
+        ${rows}
+        </tbody>
+      </table>
+      <p>Installing writes into the agent's own configuration file alongside whatever is already
+        there. LeastGrant never removes a hook it did not add, and
+        <a href="/docs/agents/">the per-agent pages</a> say what each verdict actually does once
+        it gets there — the answer is not the same on every one.</p>`;
 }
