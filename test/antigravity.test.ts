@@ -243,3 +243,69 @@ describe('antigravity: it agrees with the other adapters', () => {
     }
   });
 });
+
+describe('antigravity: the read and search tools keep their floors', () => {
+  // These were left unmapped at first, on the reasoning that guessing an
+  // argument key is worse than not mapping. Measured, that was wrong in both
+  // directions: unmapped meant `view_file` on README.md returned force_ask —
+  // an unsuppressible prompt for every ordinary file read — and a wrong key
+  // turns out to fail safe anyway, classifying as `Read(?)`, understood false,
+  // which floors. A bad guess costs a prompt; it cannot manufacture an approval.
+  // Anchored to the home the CHILD sees, not this process's.
+  //
+  // `hook()` runs the binary with HOME pointed at a throwaway, and the
+  // credential-tree rules resolve `.ssh` against `os.homedir()` inside that
+  // child. Building the path from the test runner's own home therefore named a
+  // directory that is not under the child's home at all, so a directory-level
+  // sweep did not read as a credential tree — and the failure looked like an
+  // adapter bug rather than a harness one.
+  const SSH = path.join(HOME, '.ssh').split(path.sep).join('/');
+  fs.mkdirSync(SSH, { recursive: true });
+  fs.writeFileSync(path.join(SSH, 'id_rsa'), 'PRIVATE KEY');
+  const call = (name: string, args: Record<string, unknown>) =>
+    decisionOf(hook({ toolCall: { name, args }, stepIdx: 1 }).out);
+
+  test('a credential file forces a prompt no cached grant can satisfy', () => {
+    assert.equal(call('view_file', { AbsolutePath: `${SSH}/id_rsa` }), 'force_ask');
+  });
+
+  test('a content search is translated as a content search, not a listing', () => {
+    // Asserted on the translation rather than end to end, and the reason is
+    // worth writing down. `grep_search` reads file CONTENTS; the engine decides
+    // that from `output_mode`, and without it treats the call as a names-only
+    // listing, which deliberately does not floor. So a content sweep of a
+    // credential directory came back as an ordinary cacheable ask.
+    //
+    // The end-to-end version of this cannot run here: `hook()` gives the child
+    // a throwaway HOME under the system temp directory, and the credential-tree
+    // rules exclude temp deliberately, so a `.ssh` created there is correctly
+    // not treated as a credential store. Against a real home it floors —
+    // verified by hand. Asserting the translation keeps the property under test
+    // without the harness distorting it.
+    assert.deepEqual(translateArgs('grep_search', { SearchDirectory: '/x/.ssh', Query: 'BEGIN' }), {
+      output_mode: 'content',
+      path: '/x/.ssh',
+      pattern: 'BEGIN',
+    });
+  });
+
+  test('listing the names in a credential directory asks, but does not force', () => {
+    // Deliberate, and the same line the engine already draws for Claude Code's
+    // Glob and LS: knowing that `id_rsa` exists is not reading it, and flooring
+    // every directory listing would cost more than it buys.
+    assert.equal(call('list_dir', { DirectoryPath: SSH }), 'ask');
+  });
+
+  test('an ordinary project read is an ask that can settle', () => {
+    // The cost check, and the reason the mapping exists at all. force_ask here
+    // would mean an unsuppressible prompt on every file the agent opens.
+    const ws = WS.split(path.sep).join('/');
+    assert.equal(call('view_file', { AbsolutePath: `${ws}/README.md` }), 'ask');
+    assert.equal(call('grep_search', { SearchDirectory: `${ws}/src`, Query: 'foo' }), 'ask');
+  });
+
+  test('an argument key we guessed wrong still floors', () => {
+    // The property that makes mapping on protobuf evidence acceptable.
+    assert.equal(call('view_file', { SomeUnknownKey: `${SSH}/id_rsa` }), 'force_ask');
+  });
+});

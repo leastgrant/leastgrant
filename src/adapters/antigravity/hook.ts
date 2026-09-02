@@ -156,15 +156,48 @@ interface Mapping {
   tool: string;
   /** Antigravity's argument key -> the key the engine expects. */
   args: Record<string, string>;
+  /**
+   * Arguments the engine needs that Antigravity does not send, because the
+   * distinction is carried by the tool's identity there instead.
+   *
+   * `grep_search` searches file CONTENTS. The engine's `Grep` decides that from
+   * `output_mode`, and without it treats the call as a names-only listing —
+   * which deliberately does not floor, because listing filenames is not reading
+   * credentials. So a content search over ~/.ssh came back as a plain
+   * cacheable ask rather than force_ask.
+   */
+  add?: Record<string, unknown>;
 }
 
 const TOOL_MAP: Record<string, Mapping> = {
+  // Wire-confirmed: the binary carries literal JSON examples for these.
   run_command: { tool: 'Bash', args: { CommandLine: 'command' } },
   send_command_input: { tool: 'Bash', args: { CommandLine: 'command' } },
   write_to_file: { tool: 'Write', args: { TargetFile: 'file_path', CodeContent: 'content' } },
   replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
   single_replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
   multi_replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
+
+  // Protobuf-derived: the binary has the field names (AbsolutePath with
+  // StartLine/EndLine, SearchDirectory with Query and Includes) but no literal
+  // JSON example, so these are one grade weaker in evidence than the six above.
+  //
+  // Mapping them anyway, because leaving them out was worse and because getting
+  // a key wrong here FAILS SAFE — measured: `Read` with an unrecognised key
+  // classifies as `Read(?)`, understood false, which floors. A wrong guess
+  // costs a prompt; it cannot manufacture an approval.
+  //
+  // Leaving them out cost far more than a prompt. An unmapped tool is judged as
+  // an opaque call, so `view_file` on README.md came back `force_ask` — an
+  // unsuppressible prompt for every ordinary file read the agent makes. Safe,
+  // and unusable, which in this product is its own kind of failure.
+  view_file: { tool: 'Read', args: { AbsolutePath: 'file_path' } },
+  read_file: { tool: 'Read', args: { AbsolutePath: 'file_path' } },
+  read_resource: { tool: 'Read', args: { AbsolutePath: 'file_path' } },
+  list_dir: { tool: 'LS', args: { DirectoryPath: 'path' } },
+  grep_search: { tool: 'Grep', args: { SearchDirectory: 'path', Query: 'pattern' }, add: { output_mode: 'content' } },
+  find_by_name: { tool: 'Glob', args: { SearchDirectory: 'path', Pattern: 'pattern' } },
+  read_url_content: { tool: 'WebFetch', args: { Url: 'url' } },
 };
 
 export function toolNameOf(name: string): string {
@@ -173,10 +206,10 @@ export function toolNameOf(name: string): string {
 
 /** Rename the argument keys a mapped tool uses; pass everything else through. */
 export function translateArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
-  const map = TOOL_MAP[name]?.args;
-  if (!map) return args;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) out[map[k] ?? k] = v;
+  const m = TOOL_MAP[name];
+  if (!m) return args;
+  const out: Record<string, unknown> = { ...(m.add ?? {}) };
+  for (const [k, v] of Object.entries(args)) out[m.args[k] ?? k] = v;
   return out;
 }
 
