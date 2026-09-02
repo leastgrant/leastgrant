@@ -180,7 +180,11 @@ export function analyze(req: Request, ctx: AnalyzeCtx): Analysis {
   // The original text, where a credential still has the context that makes it
   // recognisable. Structured tools carry theirs in the input object.
   let raw = safeString(req.input['command']);
-  if (!raw) {
+  // `UNRESOLVED` here means the command was not a string at all, so there is no
+  // original text to scan — fall back to the whole input, the same as for a
+  // structured tool. Without this the scrubber would search the one-character
+  // marker and miss a credential sitting in the payload.
+  if (!raw || raw === UNRESOLVED) {
     try {
       raw = JSON.stringify(req.input) ?? '';
     } catch {
@@ -1117,17 +1121,27 @@ function kindFor(c: Capability): ActionKind {
  * comes back as the unresolved marker rather than as an empty string. Empty
  * would read as "no command", which is harmless; unresolved reads as "something
  * is here and we cannot see it", which is the truth.
+ *
+ * That last paragraph was a description of the intent, not of the code. Arrays
+ * and objects have a `toString`, so they took the `String(v)` path and came
+ * back as a plausible-looking string that no shell would ever produce.
+ * `String(["sudo","rm","-rf","/var"])` is `"sudo,rm,-rf,/var"` — one token,
+ * whose program name is `var` — so an argv array sent by an agent that had not
+ * translated it lost its arguments, its targets, its floor and its identity all
+ * at once, and three different commands collapsed onto the signature `var`.
+ * Coercion that *invents* structure is worse than refusing: a wrong answer that
+ * looks like a right one.
+ *
+ * So the rule matches the intent: only a value that already *is* a scalar can
+ * become one. Translating an argv array into a shell string is a real job with
+ * real quoting rules, and it belongs in the adapter that knows the wire format
+ * (see `translate()` in the Codex adapter), not in a defensive coercion helper.
  */
 export function safeString(v: unknown): string {
   if (typeof v === 'string') return v;
   if (v === null || v === undefined) return '';
   if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
-  try {
-    const s = String(v);
-    return typeof s === 'string' ? s : UNRESOLVED;
-  } catch {
-    return UNRESOLVED;
-  }
+  return UNRESOLVED;
 }
 
 function firstString(obj: Record<string, unknown>, keys: string[]): string | undefined {

@@ -23,11 +23,10 @@
  *
  * WHAT `ask` BECOMES HERE
  *
- * Codex offers exactly two ways to say something other than allow or deny:
- * return nothing (abstain) and let its own approval flow run, or deny. Which
- * one is right depends on whether abstaining can actually reach a human, and
- * the payload tells us — `permission_mode` is one of `default`, `acceptEdits`,
- * `plan`, `dontAsk`, `bypassPermissions`.
+ * Codex offers exactly two ways to say something other than deny: return
+ * nothing (abstain) and let its own approval flow run, or deny. Which one is
+ * right depends on whether abstaining can actually reach a human, and the
+ * payload's `permission_mode` is the only signal available.
  *
  *   mode reaches a human   →  abstain. Codex prompts. This is a real `ask`.
  *
@@ -43,12 +42,49 @@
  * often enough yet, and turning a fresh install into a wall of blocks would
  * make it unusable — the same trade the Cursor adapter makes on `beforeRead`.
  *
- * The consequence, stated plainly because it belongs in the open: in `dontAsk`
- * and `bypassPermissions`, LeastGrant on Codex is a veto, not a prompt. It is
- * strictly better than running Codex without it, and strictly weaker than
- * LeastGrant on Claude Code, where an `ask` reaches you in every mode.
+ * 3. **`allow` is not a verdict on `PreToolUse` either.** Measured against
+ *    0.152.0's parser: `permissionDecision: "allow"` *without* an
+ *    `updatedInput` is rejected as an unsupported value, the hook run is marked
+ *    Failed and surfaced to the user, and the call proceeds. On `PreToolUse`,
+ *    `allow` is only the carrier for an input rewrite. So the two things this
+ *    adapter can express there are DENY and ABSTAIN, and an allow verdict is
+ *    rendered as an abstain: identical in effect, minus a spurious hook error
+ *    in the transcript. The one place an allow is genuinely enforced is
+ *    `PermissionRequest`, whose `decision.behavior = "allow"` really does
+ *    cancel the prompt Codex was about to show.
+ *
+ * The consequence, stated plainly because it belongs in the open: in every mode
+ * that cannot prompt, LeastGrant on Codex is a veto, not a prompt. It is
+ * strictly better than running Codex without it, and weaker than LeastGrant on
+ * an agent that can express `ask` at all — though note that Claude Code's `ask`
+ * also degrades to a deny wherever no prompt surface exists (`claude -p`), so
+ * the difference is that Codex has no prompt surface to degrade *from*.
+ *
+ * ---
+ *
+ * TRANSLATING THE WIRE, NOT JUST THE TOOL NAME
+ *
+ * This adapter used to rename `apply_patch` to `Edit` and `shell` to `Bash` and
+ * consider its job done. Renaming the tool while passing its arguments through
+ * unread is the whole bug class this file now exists to prevent: the engine is
+ * handed a payload it *appears* to understand, and answers confidently about
+ * something it never saw.
+ *
+ * The measured case: Codex's shell tool sends `command` as an argv ARRAY
+ * (`{"command":["sudo","rm","-rf","/var"],"workdir":"..."}`), which is the
+ * normal shape and not an edge case. Passed through, `String(array)` made it
+ * the single token `sudo,rm,-rf,/var`, whose program name is `var` — so
+ * `sudo rm -rf /var`, `ls -la /var` and `cp /root/.ssh/id_rsa /var` all
+ * collapsed onto one learnable signature with no targets and no floor. The
+ * identical command as a string denied.
+ *
+ * See {@link translate}. Every field Codex sends is either read deliberately or
+ * declared untranslatable; nothing is forwarded on the assumption that whatever
+ * it holds must be a string.
  */
 
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { judgePre, recordPost, type PreOutcome } from '../claude-code/hook.js';
 import { logLine } from '../../store/index.js';
 import type { Decision } from '../../core/types.js';
@@ -73,9 +109,56 @@ interface CodexInput {
  * An allowlist rather than a blocklist of the unattended ones: a mode Codex
  * adds later that this file has never heard of should be treated as unable to
  * prompt, so a new mode makes LeastGrant stricter rather than quietly toothless.
+ *
+ * The set used to be `['default','acceptedits','plan','ask','']`, which was
+ * three kinds of wrong measured against codex-cli 0.152.0.
+ *
+ *   `ask` is not a permission mode at all — it is a *permissionDecision* value.
+ *   That entry could never match anything and was pure noise in a security
+ *   allowlist, which is the worst place for noise.
+ *
+ *   `acceptedits` and `plan` are in the shipped JSON schema but the runtime
+ *   never emits them: `hook_permission_mode()` maps `AskForApproval::Never` to
+ *   `bypassPermissions` and every other policy to `default`, full stop. Keeping
+ *   them was harmless only for as long as they stayed unreachable — and if
+ *   `acceptEdits` ever does become reachable it means "stop asking about
+ *   edits", which is the opposite of what this set is asserting about it.
+ *
+ *   `''` — no mode — was read as "a human is there". `permission_mode` is a
+ *   *required* field on Codex's payloads, so its absence means the payload is
+ *   not a shape this adapter has verified, which is precisely the case the
+ *   allowlist exists to make strict. Copilot's missing mode taught this lesson
+ *   once already, in `wasAttended`.
+ *
+ * What is left is the one live discriminator: `default` versus
+ * `bypassPermissions`. And `default` is a weaker signal than it reads as —
+ * see {@link canPromptAHuman}.
  */
-const PROMPTS_A_HUMAN = new Set(['default', 'acceptedits', 'plan', 'ask', '']);
+const PROMPTS_A_HUMAN = new Set(['default']);
 
+/**
+ * Can abstaining still reach a person?
+ *
+ * "Can", not "will", and the gap is real enough to write down. `default` is
+ * derived from the approval policy alone and ignores the sandbox, so it covers
+ * `-a on-request` (where the *model* decides when to ask) and `-a granular`
+ * (which can auto-reject rather than prompt). Most calls under `on-request`
+ * with a workspace-write sandbox never reach an approval prompt at all.
+ *
+ * So abstaining in `default` does not create a prompt. It preserves whatever
+ * Codex would have done, which is sometimes nothing.
+ *
+ * That is why {@link resolve} checks the floor BEFORE it consults this. For an
+ * action that is merely unfamiliar, preserving Codex's own flow is right, and
+ * denying everything unrecognised in the ordinary interactive mode would block
+ * most of a normal session. For a floored one — a credential, exfiltration,
+ * persistence, privilege — "sometimes nothing" is not good enough, and since a
+ * hook cannot manufacture a prompt on Codex in any mode, the only two honest
+ * answers are deny or let it happen.
+ *
+ * So this predicate no longer decides whether a floor is enforced. It decides
+ * what happens to the rest.
+ */
 export function canPromptAHuman(mode: string | undefined): boolean {
   return PROMPTS_A_HUMAN.has(String(mode ?? '').toLowerCase());
 }
@@ -113,58 +196,210 @@ export function looksLikeCodex(input: CodexInput): boolean {
   return /^PermissionRequest$/i.test(String(input.hook_event_name ?? ''));
 }
 
-/**
- * Normalise `tool_input`, or say that it could not be normalised.
- *
- * The distinction is the whole point. This used to return `{}` for anything it
- * did not recognise — a string, an array, a primitive — and `{}` is not
- * "unknown", it is "a call with no arguments". The engine dutifully judged that
- * as a fully-understood no-op: capability `meta`, nil blast, no guards, no
- * floor. So a shell command sent as a bare string, or as Codex's argv array,
- * came back floorless and the adapter stood aside. `cat ~/.ssh/id_rsa` sent
- * that way was ungated.
- *
- * An adapter that cannot faithfully translate a call must not produce a
- * confident verdict about it. Now it says so, and the caller fails strict.
- */
-function toolInputOf(input: CodexInput): { input: Record<string, unknown>; translated: boolean } {
-  const raw = input.tool_input;
+/** The result of reading a Codex payload into something the engine can judge. */
+export interface Translation {
+  /** False when this adapter could not faithfully read the call. */
+  ok: boolean;
+  /** The tool input as the engine's vocabulary spells it. */
+  input: Record<string, unknown>;
+  /**
+   * Where the command will actually run.
+   *
+   * Distinct from the session `cwd`: `workdir` changes where every relative
+   * path in the command lands, but it does not change which project this is.
+   * Only set when the payload named one.
+   */
+  execCwd?: string;
+  /** Why not, when `ok` is false. Shown to the user in the deny reason. */
+  why?: string;
+}
 
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    return { input: raw as Record<string, unknown>, translated: true };
+/** Tool kinds whose call is meaningless without a command we can read. */
+function isShellTool(tool: string): boolean {
+  return /^(Bash|shell)$/i.test(tool);
+}
+
+/** Tool kinds whose call is meaningless without a path we can read. */
+function isPatchTool(tool: string): boolean {
+  return /^(Edit|Write)$/i.test(tool);
+}
+
+/**
+ * Read one Codex payload, or say that it could not be read.
+ *
+ * The distinction is the whole point. An earlier version returned `{}` for
+ * anything it did not recognise, and `{}` is not "unknown", it is "a call with
+ * no arguments" — which the engine judges as a fully-understood no-op:
+ * capability `meta`, nil blast, no guards, no floor. That was fixed for a
+ * `tool_input` that was *itself* the wrong type, and left wide open for the
+ * case that actually occurs: a well-formed object whose `command` is not a
+ * string.
+ *
+ * So the rule is now positional rather than structural. For a shell tool the
+ * command must be readable *as a command*; for a patch tool a target path must
+ * be readable *as a path*. A payload that satisfies neither is untranslatable,
+ * and the caller fails strict. Nothing is forwarded on the assumption that
+ * whatever a key holds must be a string, because that assumption is exactly
+ * what `String(["sudo","rm","-rf","/var"])` exploits.
+ *
+ * @param tool the tool name already normalised by {@link toolNameOf}.
+ */
+export function translate(input: CodexInput, tool: string): Translation {
+  const envelope = envelopeOf(input, tool);
+  if (!envelope) return { ok: false, input: {}, why: 'unrecognised argument shape' };
+
+  const out: Record<string, unknown> = { ...envelope };
+  const result: Translation = { ok: true, input: out };
+
+  // --- workdir --------------------------------------------------------------
+  //
+  // A documented parameter of Codex's shell tool, and the one field whose loss
+  // silently rewrites the meaning of the command: with `workdir` outside the
+  // project, `echo x > out.txt` is a write outside the project, not a write to
+  // the project root. Dropped, it produced capability `fs.write.workspace`, no
+  // floor, and — worse — the *same* signature as the benign in-project form, so
+  // a dozen approvals of the harmless twin promoted the escape to `allow`.
+  //
+  // It is an implicit `cd` in front of the command, so it is handled the way
+  // the engine already handles `cd`: it moves where relative paths resolve, and
+  // it does not move which project we are in.
+  if ('workdir' in out) {
+    const wd = out['workdir'];
+    delete out['workdir'];
+    if (typeof wd === 'string' && wd.trim()) result.execCwd = absoluteWorkdir(wd, input.cwd);
+    else if (wd !== undefined && wd !== null) {
+      return { ok: false, input: {}, why: 'workdir is present but not a path' };
+    }
   }
 
-  // Codex may send a shell call as an argv array: ["bash","-lc","cat x"].
+  // --- with_escalated_permissions ------------------------------------------
   //
-  // Each element is re-quoted rather than joined with spaces. A plain join is
-  // lossy in the direction that matters: ["bash","-lc","cat ~/.ssh/id_rsa"]
-  // becomes `bash -lc cat ~/.ssh/id_rsa`, where the payload has fallen out of
-  // the -c argument and become positional noise. The parser then sees a
-  // different, harmless command — two distinct actions collapsing onto one
-  // signature, which SECURITY.md names as a vulnerability in its own right.
-  if (Array.isArray(raw) && raw.every((p) => typeof p === 'string')) {
-    const command = (raw as string[]).map(quoteArg).join(' ');
-    return { input: { command }, translated: true };
+  // Codex's own flag for "run this outside the sandbox". The engine already
+  // models exactly that under Claude Code's spelling: it joins the signature
+  // and is never learnable, so training on the sandboxed form cannot cover the
+  // unsandboxed one. Translating the name means one profile covers both agents
+  // rather than the flag being invisible on one of them.
+  if (out['with_escalated_permissions'] === true) {
+    delete out['with_escalated_permissions'];
+    out['dangerouslyDisableSandbox'] = true;
+  }
+
+  // --- the command ----------------------------------------------------------
+  if (isShellTool(tool)) {
+    const command = commandOf(out);
+    if (command === undefined) {
+      return { ok: false, input: {}, why: 'no readable command in a shell call' };
+    }
+    delete out['input'];
+    out['command'] = command;
+    return result;
+  }
+
+  // --- the patch target -----------------------------------------------------
+  if (isPatchTool(tool)) {
+    if (patchTargetPath(out)) return result;
+    return { ok: false, input: {}, why: 'no target path found' };
+  }
+
+  return result;
+}
+
+/**
+ * A `workdir` as somewhere the engine can resolve paths against.
+ *
+ * Two spellings have to be handled before it is usable as a base directory. A
+ * relative `workdir` is relative to the session directory, and resolving it
+ * against this hook process's own cwd instead would place every path in the
+ * command somewhere arbitrary. A leading `~` is expanded because the engine
+ * expands it in every path argument, and a base directory that behaved
+ * differently from the arguments resolved against it would be its own trap.
+ */
+function absoluteWorkdir(workdir: string, sessionCwd: string | undefined): string {
+  let wd = workdir;
+  if (wd === '~' || wd.startsWith('~/') || wd.startsWith('~\\')) {
+    const rest = wd.slice(1).replace(/^[\\/]+/, '');
+    const home = os.homedir().replace(/[\\/]+$/, '');
+    wd = rest ? home + path.sep + rest : home;
+  }
+  if (path.isAbsolute(wd)) return wd;
+  return sessionCwd ? path.resolve(sessionCwd, wd) : wd;
+}
+
+/**
+ * The outer shape: get to an object, or fail.
+ *
+ * The top-level forms (a bare argv array, a bare command string, a JSON string)
+ * are kept because they were observed and are cheap to accept. The object form
+ * is the normal one.
+ */
+function envelopeOf(input: CodexInput, tool: string): Record<string, unknown> | undefined {
+  const raw = input.tool_input;
+
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+
+  if (Array.isArray(raw)) {
+    const argv = quoteArgv(raw);
+    return argv === undefined ? undefined : { command: argv };
   }
 
   if (typeof raw === 'string') {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return { input: parsed as Record<string, unknown>, translated: true };
+        return parsed as Record<string, unknown>;
       }
     } catch {
       /* not JSON */
     }
     // A bare string on a shell tool is the command itself.
-    if (/^(Bash|shell)$/i.test(String(input.tool_name ?? ''))) {
-      return { input: { command: raw }, translated: true };
-    }
+    if (isShellTool(tool)) return { command: raw };
+    return undefined;
   }
 
-  if (raw === undefined || raw === null) return { input: {}, translated: true };
+  // No arguments at all. Legitimate for a tool that takes none; caught below
+  // for the tools where it cannot be.
+  if (raw === undefined || raw === null) return {};
 
-  return { input: {}, translated: false };
+  return undefined;
+}
+
+/**
+ * The command a shell call will run, as one shell string, or undefined.
+ *
+ * `command` is the shell tool's key and `input` is unified exec's; both carry
+ * either a string or an argv array. Anything else — a number, an object, an
+ * array with a non-string in it, or nothing at all — is not a command this
+ * adapter can claim to have read, and saying so is the whole point of the
+ * function. `String(value)` is deliberately never called.
+ */
+function commandOf(obj: Record<string, unknown>): string | undefined {
+  for (const key of ['command', 'input']) {
+    if (!(key in obj)) continue;
+    const v = obj[key];
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) return quoteArgv(v);
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * An argv array as one shell string that parses back to the same command.
+ *
+ * Each element is re-quoted rather than joined with spaces. A plain join is
+ * lossy in the direction that matters: `["bash","-lc","cat ~/.ssh/id_rsa"]`
+ * becomes `bash -lc cat ~/.ssh/id_rsa`, where the payload has fallen out of the
+ * `-c` argument and become positional noise. The parser then sees a different,
+ * harmless command — two distinct actions collapsing onto one signature, which
+ * SECURITY.md names as a vulnerability in its own right.
+ *
+ * An array holding anything other than strings is not an argv, so it comes back
+ * undefined rather than being coerced.
+ */
+function quoteArgv(argv: unknown[]): string | undefined {
+  if (!argv.length) return undefined;
+  if (!argv.every((p) => typeof p === 'string')) return undefined;
+  return (argv as string[]).map(quoteArg).join(' ');
 }
 
 /**
@@ -178,7 +413,7 @@ function quoteArg(arg: string): string {
 }
 
 /**
- * Tools whose arguments name a path, and the keys the engine reads them from.
+ * The path a patch will write to, and where the engine will look for it.
  *
  * Codex calls the patch tool `apply_patch` and carries the edit in its own
  * shape. Renaming it to `Edit` without moving the payload produced an `Edit`
@@ -186,15 +421,35 @@ function quoteArg(arg: string): string {
  * project, persistence) had nothing to match against, and a patch writing
  * anywhere at all came back floorless.
  *
- * Rather than guess at a payload shape that is not documented and may change,
- * this reports whether a recognised target could be found. If not, the call is
- * untranslatable and fails strict.
+ * Two shapes are read. A payload that already names the file in a key the
+ * engine knows is used as-is. Otherwise a `*** Begin Patch` envelope is scanned
+ * for the file it touches — and *only* if it names exactly one, because the
+ * engine judges a structured edit against a single target and picking one of
+ * several would be the same "confident answer about something it did not see"
+ * this whole file is guarding against. A multi-file patch stays untranslatable
+ * and fails strict.
+ *
+ * Mutates: sets `file_path` when it recovered one from an envelope, because
+ * `file_path` is the key the engine reads.
  */
-function patchTargetsPresent(toolInput: Record<string, unknown>): boolean {
+function patchTargetPath(toolInput: Record<string, unknown>): boolean {
   for (const key of ['file_path', 'path', 'filePath', 'target_file', 'filename', 'notebook_path']) {
     if (typeof toolInput[key] === 'string' && toolInput[key]) return true;
   }
-  return false;
+
+  const files = new Set<string>();
+  for (const v of Object.values(toolInput)) {
+    if (typeof v !== 'string' || !/^\*\*\* /m.test(v)) continue;
+    for (const m of v.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+      files.add(m[1]!.trim());
+    }
+    // `*** Move to:` renames the file the preceding Update named, so the
+    // destination is written to as well and has to count as a target.
+    for (const m of v.matchAll(/^\*\*\* Move to: (.+)$/gm)) files.add(m[1]!.trim());
+  }
+  if (files.size !== 1) return false;
+  toolInput['file_path'] = [...files][0]!;
+  return true;
 }
 
 /**
@@ -203,7 +458,7 @@ function patchTargetsPresent(toolInput: Record<string, unknown>): boolean {
  * means one profile covers both agents instead of the same edit being a
  * stranger depending on which editor was open.
  */
-function toolNameOf(name: string | undefined): string {
+export function toolNameOf(name: string | undefined): string {
   const raw = String(name ?? 'unknown');
   if (/^apply_patch$/i.test(raw)) return 'Edit';
   if (/^shell$/i.test(raw)) return 'Bash';
@@ -216,29 +471,68 @@ export type CodexAction =
   | { kind: 'deny'; message: string }
   | { kind: 'abstain'; why: string };
 
+/** The two Codex events that carry a verdict, which do not accept the same ones. */
+export type CodexVerdictEvent = 'PreToolUse' | 'PermissionRequest';
+
 /**
  * Turn a LeastGrant verdict into something Codex can express.
  *
  * Pure, and exported, because this is the part worth testing exhaustively:
- * every combination of verdict, floor and permission mode has one right answer
- * and getting one of them wrong is a silent hole.
+ * every combination of verdict, floor, permission mode and event has one right
+ * answer and getting one of them wrong is a silent hole.
+ *
+ * `event` is a parameter because the two events do not accept the same
+ * vocabulary. `PermissionRequest` takes allow and deny. `PreToolUse` takes only
+ * deny: measured against 0.152.0, `permissionDecision:"allow"` with no
+ * `updatedInput` is rejected as unsupported, the run is marked Failed, the
+ * error is shown, and the call proceeds — so every LeastGrant allow was being
+ * reported to the user as a hook failure. An abstain has the identical effect
+ * on the call and does not lie about having decided something.
  */
-export function resolve(outcome: PreOutcome, mode: string | undefined): CodexAction {
-  if (outcome.decision === 'allow') return { kind: 'allow' };
+export function resolve(
+  outcome: PreOutcome,
+  mode: string | undefined,
+  event: CodexVerdictEvent = 'PermissionRequest',
+): CodexAction {
+  if (outcome.decision === 'allow') {
+    return event === 'PreToolUse'
+      ? { kind: 'abstain', why: 'allow: PreToolUse cannot express it, so standing aside' }
+      : { kind: 'allow' };
+  }
   if (outcome.decision === 'deny') return { kind: 'deny', message: outcome.headline };
 
   // decision === 'ask', which Codex cannot express.
-  if (canPromptAHuman(mode)) {
-    return { kind: 'abstain', why: 'ask: deferring to the Codex approval prompt' };
-  }
+  //
+  // The floor is checked BEFORE the mode, and the order is the whole point.
+  //
+  // It used to be the other way round, so `default` short-circuited to abstain
+  // and a credential read in an ordinary interactive session was never gated at
+  // all. The reasoning for abstaining there — that denying everything
+  // unfamiliar would block most of a normal session — is right, and it is an
+  // argument about *unfamiliar*, not about *floored*. This branch only ever
+  // fires on the floored set: credential reads, piping the network into a
+  // shell, sudo, writes to LeastGrant's own state. Denying those does not block
+  // a normal session, because a normal session does not do them.
+  //
+  // And `default` cannot be relied on to prompt. It is derived from the
+  // approval policy alone, so it covers `-a on-request`, where the model
+  // decides whether to ask, and `-a granular`, which can auto-reject without
+  // ever showing anything. A hook cannot manufacture a prompt on Codex in any
+  // mode, so for the floored set the choice is deny or let it happen.
+  //
+  // Same trade the Cursor adapter already makes on `beforeReadFile`: blocking
+  // is recoverable — add a rule and move on — and reading the credential is not.
   if (outcome.floor && !onlyBecauseUnreadable(outcome)) {
     return {
       kind: 'deny',
       message:
-        `${outcome.headline} LeastGrant would have asked, but this Codex mode ` +
-        `(${String(mode)}) cannot prompt, so it is blocked instead. To permit it, add a ` +
-        `rule: leastgrant allow "<pattern>" --force`,
+        `${outcome.headline} LeastGrant would have asked, but Codex cannot prompt ` +
+        `for one in any mode (this is ${String(mode)}), so it is blocked instead. ` +
+        `To permit it, add a rule: leastgrant allow "<pattern>" --force`,
     };
+  }
+  if (canPromptAHuman(mode)) {
+    return { kind: 'abstain', why: 'ask: deferring to whatever Codex would have done' };
   }
   return {
     kind: 'abstain',
@@ -278,14 +572,23 @@ function onlyBecauseUnreadable(outcome: PreOutcome): boolean {
   return guards.length > 0 && guards.every((r) => r === 'guard.not-understood');
 }
 
-/** Render for `PreToolUse`, which uses Claude Code's field names. */
+/**
+ * Render for `PreToolUse`, which uses Claude Code's field names but accepts
+ * only one of its values.
+ *
+ * `deny` or nothing. An `allow` never reaches here — `resolve` turns it into an
+ * abstain for this event — and the assertion is kept rather than typed away
+ * because emitting one is not a cosmetic mistake: 0.152.0 rejects it as an
+ * unsupported value, marks the run Failed and shows the user an error for what
+ * was meant to be an approval.
+ */
 function renderPreToolUse(action: CodexAction): string | null {
-  if (action.kind === 'abstain') return null;
+  if (action.kind !== 'deny') return null;
   const out = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      permissionDecision: action.kind,
-      ...(action.kind === 'deny' ? { permissionDecisionReason: `LeastGrant: ${action.message}` } : {}),
+      permissionDecision: 'deny',
+      permissionDecisionReason: `LeastGrant: ${action.message}`,
     },
   };
   return JSON.stringify(out);
@@ -335,23 +638,19 @@ export function runCodexHook(raw: unknown): void {
   }
 
   const tool = toolNameOf(input.tool_name);
-  const { input: toolInput, translated } = toolInputOf(input);
+  const translation = translate(input, tool);
 
   // Could this call be translated faithfully into something the engine can
   // judge? If not, no verdict about it means anything.
   //
-  // Two ways it fails: an argument shape this adapter does not recognise, and
-  // a patch whose target path is somewhere the engine will not find. Both used
-  // to sail through as a confident, floorless, fully-understood verdict — the
-  // worst possible answer, because it is indistinguishable from "checked and
-  // fine".
-  const untranslatable =
-    !translated || (/^(Edit|Write)$/.test(tool) && !patchTargetsPresent(toolInput));
-
-  if (untranslatable) {
+  // It fails for an argument shape this adapter does not recognise, for a shell
+  // call whose command is not readable as a command, and for a patch whose
+  // target path is not readable as a path. All of them used to sail through as
+  // a confident, floorless, fully-understood verdict — the worst possible
+  // answer, because it is indistinguishable from "checked and fine".
+  if (!translation.ok) {
     logLine(
-      `codex: could not translate ${String(input.tool_name)} faithfully ` +
-        `(${translated ? 'no target path found' : 'unrecognised argument shape'})`,
+      `codex: could not translate ${String(input.tool_name)} faithfully (${String(translation.why)})`,
     );
     if (!canPromptAHuman(input.permission_mode)) {
       const body =
@@ -377,17 +676,39 @@ export function runCodexHook(raw: unknown): void {
   const outcome = judgePre({
     agent: 'codex',
     cwd: input.cwd ?? '',
+    ...(translation.execCwd ? { execCwd: translation.execCwd } : {}),
     tool,
-    input: toolInput,
+    input: translation.input,
     sessionId: String(input.session_id ?? 'unknown'),
     toolUseId: callId(input),
     permissionMode: input.permission_mode,
+    // Nothing LeastGrant says on Codex ever reaches a person.
+    //
+    // `evidenceFor` banks a completed `ask` as `confirmed` — the strongest
+    // evidence class, and the only one that promotes a signature — on the
+    // reasoning that a human saw our prompt and clicked allow. On Codex there
+    // is no prompt to click: an `ask` is an abstain here, and
+    // `permission_mode: "default"` does not mean a human was consulted, since
+    // it is derived from the approval policy alone and covers `-a on-request`
+    // (where the *model* decides whether to ask) and `-a granular` (which can
+    // auto-reject without showing anything).
+    //
+    // PostToolUse compounds it: Codex fires it only when the call SUCCEEDED, so
+    // the evidence stream is not even a record of what was attempted. Banking
+    // `confirmed` off that is the tool manufacturing its own strongest
+    // evidence, and the escalation is concrete — a promoted signature makes
+    // LeastGrant answer `allow` on PermissionRequest, actively cancelling a
+    // prompt Codex was about to show.
+    //
+    // The cost, stated rather than hidden: Codex learns by observation only,
+    // and observation cannot promote anything that leaves the workspace.
+    attended: false,
   });
 
   // `observe` posture: watch, say nothing.
   if (outcome.silent) return;
 
-  const action = resolve(outcome, input.permission_mode);
+  const action = resolve(outcome, input.permission_mode, isPre ? 'PreToolUse' : 'PermissionRequest');
 
   // An abstain is a real outcome, not a failure, but it is also the one that
   // leaves an action ungated. Logging it means "LeastGrant let that through"
@@ -409,8 +730,13 @@ export function runCodexHook(raw: unknown): void {
  * them, not in a changelog.
  */
 export function codexCaveat(mode: string | undefined): string {
+  const shared =
+    'Codex enforces only deny, and only on PreToolUse — an allow there is rejected as ' +
+    'unsupported and the call proceeds, so LeastGrant stands aside instead. An allow is ' +
+    'honoured on PermissionRequest, which fires only when Codex was already going to prompt.';
   return canPromptAHuman(mode)
-    ? 'Codex: allow and deny are enforced; ask defers to Codex’s own approval prompt.'
-    : `Codex in ${String(mode)}: nothing can prompt you, so ask becomes deny at a floor and ` +
-        'is ungated otherwise.';
+    ? `${shared} In ${String(mode)}, an ask defers to whatever Codex’s own approval policy ` +
+        'would have done — which, under -a on-request or -a granular, may be nothing.'
+    : `${shared} In ${String(mode)} nothing can prompt you, so an ask becomes deny at a floor ` +
+        'and is ungated otherwise.';
 }
