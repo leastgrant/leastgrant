@@ -112,6 +112,9 @@ The short version, so you can triage your own finding quickly:
 - The ledger is append-only but **not tamper-evident**. It is not hash-chained, because that
   would need a single writer and a lock that can wedge an agent mid-session is a worse failure
   than a log you cannot prove is complete.
-- The shell parser fully accounts for 98.4% of a corpus of 5,452 real agent commands. The
-  remaining 1.6% is not silently allowed — it is marked not-understood, which forces an ask. But
-  "we parse almost everything" is a statement about quietness, not about coverage.
+- Parsing coverage and *understanding* are different numbers, and this file used to quote one as
+  if it were the other. The shell parser structurally accounts for almost everything it is given.
+  Roughly half of real commands are nonetheless marked not-understood, because an interpreter
+  running code we cannot read is parsed perfectly and understood not at all. The single measured
+  figure, with the sample size and the machine it came from, is in the README; it is not repeated
+  here, because two copies of a number is how they came to disagree.

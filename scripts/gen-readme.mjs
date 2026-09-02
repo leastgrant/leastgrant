@@ -116,6 +116,17 @@ export function currentBlock(readme = fs.readFileSync(README, 'utf8')) {
   return readme.slice(from, to + END.length);
 }
 
+/**
+ * Compare without caring about line endings.
+ *
+ * git is configured to convert on checkout here, so the committed README
+ * arrives with CRLF while this file emits LF, and a byte comparison reports
+ * drift on every line of an identical table. That would make the check
+ * unfixable by running the generator, which is the one instruction the failure
+ * message gives.
+ */
+const lf = (s) => s.split('\r\n').join('\n');
+
 export function apply() {
   const readme = fs.readFileSync(README, 'utf8');
   const from = readme.indexOf(BEGIN);
@@ -123,7 +134,11 @@ export function apply() {
   if (from === -1 || to === -1) {
     throw new Error(`README.md has no ${BEGIN} / ${END} block to fill`);
   }
-  const next = readme.slice(0, from) + render() + readme.slice(to + END.length);
+  // Keep whatever line ending the file already uses, so writing the block does
+  // not rewrite every line of the README in the diff.
+  const crlf = readme.includes('\r\n');
+  const block = crlf ? render().split('\n').join('\r\n') : render();
+  const next = readme.slice(0, from) + block + readme.slice(to + END.length);
   if (next === readme) return false;
   fs.writeFileSync(README, next);
   return true;
@@ -138,7 +153,7 @@ if (process.argv[1]?.endsWith('gen-readme.mjs')) {
       console.error('README.md has lost its generated-block markers');
       process.exit(1);
     }
-    if (current !== render()) {
+    if (lf(current) !== lf(render())) {
       console.error('README.md agent table is out of date. Run: npm run gen:readme');
       process.exit(1);
     }
