@@ -111,6 +111,18 @@ Nothing to peel here. Two flags to keep in mind for later:
 For contrast, `bash deploy.sh` unwraps to `wrappers: [script-file]`, `opaque: true`, note
 `runs the script deploy.sh, whose contents are not analysed`.
 
+A wrapper whose payload is *text* — `sh -c '…'`, `ssh host '…'`, `trap '…' EXIT`,
+`env -S '…'` — hands that text back through the same expansion the top level gets, and the
+result is flattened into the same list. That recursion is the invariant this stage exists for:
+an action the parser never produced can never be judged, so "what does this run" must have one
+answer computed one way. Two consequences worth stating, because both were once wrong.
+Everything a payload finds comes back, at any depth: `bash -c 'bash -c "echo hi; cat
+~/.ssh/id_rsa"'` reports the credential read, not just the `echo`. And everything the wrapper
+established applies to all of the payload, not just its first command: the tree `find -exec`
+walks, an outer `BASH_ENV=`, `sudo`'s elevation, the position in a pipe or a loop. A command
+with no program at all is in the list too — `PATH=/tmp/evil` runs nothing and decides what
+everything after it resolves to, and `X=1 > ~/.bashrc` truncates a startup file.
+
 There are two reasons an action can be opaque, and `classify.ts` separates them, because only
 one of them is waivable. `bash ./build.sh` is opaque because a file *in the project* has not
 been read — that is the concession autopilot makes. But `bash --rcfile /tmp/evil -c ls`,

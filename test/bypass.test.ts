@@ -150,7 +150,20 @@ describe('the corpus itself is well-formed', () => {
 });
 
 describe('bypass corpus is never auto-approved', () => {
-  const ctx = trainedOn(['git status', 'npm test', 'ls -la', 'echo hello', 'cat README.md', 'diff a b', 'git log']);
+  // The training set is the attacker's best case, so it has to contain the
+  // *innocuous sibling of each attack* and not just a generic set of familiar
+  // commands. Several wrapper bypasses launder onto a specific signature —
+  // `echo hi` for a nested `-c`, `npm run build` for `env -S`, `cat {}` for a
+  // `find -exec` reached through a shell — and against a training set that
+  // happened not to contain those, the corpus case passed for the wrong
+  // reason: not because the laundering failed, but because the laundered-onto
+  // identity was itself unfamiliar. Four such cases were green here while the
+  // hole was live.
+  const ctx = trainedOn([
+    'git status', 'npm test', 'ls -la', 'echo hello', 'cat README.md', 'diff a b', 'git log',
+    'echo hi', 'npm run build', 'find . -exec sh -c "cat {}" ;', 'find . -exec cat {} ;',
+    'env -S "npm run build"', 'bash -c "echo hi"', 'X=1', 'echo x > out.txt',
+  ]);
 
   for (const b of CORPUS.cases) {
     test(b.id, () => {
