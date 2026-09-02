@@ -6,9 +6,10 @@
   "configPath": "~/.cursor/hooks.json",
   "versionTested": "3.18.25",
   "lastVerified": "2026-09-02",
-  "osTested": [],
+  "osTested": [
+    "win32"
+  ],
   "osUntested": [
-    "win32",
     "darwin",
     "linux"
   ],
@@ -32,8 +33,8 @@
   "failure": {
     "onCrash": {
       "value": "closed",
-      "evidence": "source",
-      "note": "Two independent reasons, both read out of the 3.18.25 bundle. Invalid or schema-invalid JSON on a before* event is converted into a DENY by the response validator (workbench.desktop.main.js @19851459) rather than ignored, which is the opposite of what Cursor's own documentation says and of what LeastGrant's adapter comment used to claim. And LeastGrant now sets failClosed on those events, so a hook that cannot start is refused rather than skipped. Cursor is therefore, with Copilot, one of the two agents where LeastGrant fails in the safe direction."
+      "evidence": "probe",
+      "note": "Two independent reasons, and both are now measured rather than read. Invalid or schema-invalid JSON on a before* event is converted into a DENY by the response validator, and LeastGrant sets `failClosed` on those three events, which Cursor honours by refusing a call whose hook produced no output. Verified by driving Cursor’s real Windows transport: a hook that emits nothing has its tool call refused with \"Tool blocked because this hook is configured to fail closed\"."
     },
     "onTimeout": {
       "value": "closed",
@@ -119,8 +120,8 @@
     "Cursor also ingests Claude Code hooks from .claude/settings.json and ~/.claude/settings.json, so installing both adapters may double-fire."
   ],
   "leastgrantLimitations": [
-    "Never run inside a live Cursor session. The contract is verified against the shipped 3.18.25 bundle; the integration is not verified at all.",
-    "Never run inside a live Cursor session. The installer sets `failClosed` on the three gating events, and Cursor turns malformed hook output into a deny, so LeastGrant fails closed here — but both of those are read from the shipped bundle rather than observed in a running session.",
-    "Reads and MCP calls are covered; writes are not, so the support level is partial rather than enforcing."
+    "Never run inside a live Cursor session, and there is no way to do so autonomously: `cursor --help` offers only VS Code flags plus `--chat`, which opens a window, and the hooks service is a workbench contribution whose extension host is forked per window. What HAS been done is stronger than a contract test and weaker than a live session — Cursor’s Windows invocation was reproduced byte for byte (powershell.exe with -NoProfile -NonInteractive -ExecutionPolicy Bypass, the payload written to a %TEMP% file and piped in through $input) and LeastGrant driven through it. What is still unverified is that a real Cursor loads ~/.cursor/hooks.json, registers the five steps, and raises its approval UI on an ask.",
+    "That reproduction is how the worst bug in this integration was found: PowerShell 5.1 prefixes the payload with a UTF-8 BOM, JSON.parse threw, the hook exited silently, and failClosed turned that into a deny of every shell command, MCP call and file read. Fixed. It is recorded here because it is the strongest available argument that contract-testing an integration is not the same as running it.",
+    "Verified on Windows only. The POSIX transport passes the payload on native stdin instead and has not been exercised."
   ]
 }

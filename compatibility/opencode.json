@@ -6,25 +6,31 @@
   "configPath": "~/.config/opencode/opencode.json",
   "versionTested": "1.18.26",
   "lastVerified": "2026-09-02",
-  "osTested": ["win32"],
-  "osUntested": ["darwin", "linux"],
-
-  "deferredBecause": "The hook that looks like the right surface does not work. `permission.ask` is declared in the shipped plugin types and is never fired by the shipped binary — confirmed by live probe: a plugin exporting it, returning deny, against a real permission request, was never called. Everything else on offer is either an observation point that cannot veto, or a config ruleset evaluated before any plugin sees it. An adapter built on this could not honestly claim to enforce.",
-
+  "osTested": [
+    "win32"
+  ],
+  "osUntested": [
+    "darwin",
+    "linux"
+  ],
+  "deferredBecause": "Deferred, and the reason has changed. The old one — \"no plugin-facing verdict API\" — is refuted. The `event` hook receives `permission.asked` carrying the pending request id, and POST /permission/{requestID}/reply resolves the Deferred the tool is blocked on. Measured on this build: a plugin replying `reject` genuinely stopped a call and the model was told why; a plugin replying `once`, with no human anywhere, let it run. That is a real per-call verdict originated by plugin code. What stops it being enforcement is that it is first-writer-wins rather than a gate. Permission.reply deletes the pending entry before resolving, so whoever answers first decides and the loser gets NotFoundError. In the measurement the plugin beat an auto-approving SSE client by 20ms (67 against 87), and nothing in the source guarantees that precedence — 300ms of policy deliberation would lose. LeastGrant will not ship an adapter that enforces only when it happens to be fast enough. Two smaller obstacles behind that one. The SDK client handed to plugins omits the permission namespace, so an adapter would have to hand-roll HTTP and solve port discovery itself, and `opencode run --port N` did not bind N in testing. And `permission.ask` is being quietly removed — the official docs have dropped it while the TypeScript types still declare it — so waiting for it to be implemented is not indicated.",
   "verdicts": {
-    "allow": { "value": "unsupported", "evidence": "probe", "note": "No plugin-facing verdict API that reaches the permission engine." },
+    "allow": {
+      "value": "partial",
+      "evidence": "probe",
+      "note": "A plugin can allow a pending request by replying `once` to /permission/{id}/reply, and it works with no human involved. A race against any other responder rather than a gate, so not dependable."
+    },
     "deny": {
       "value": "partial",
       "evidence": "probe",
-      "note": "Two routes work, neither is a hook verdict: a config ruleset deny (evaluated before any event is published, so static, not per-call) and throwing from tool.execute.before. Both hold under yolo."
+      "note": "Same channel and the same caveat. A reply of `reject` stopped a real call and the deny reason reached the model."
     },
     "ask": {
       "value": "unsupported",
       "evidence": "probe",
-      "note": "A plugin cannot originate an ask. There is no API to raise a prompt from event, config, or tool.execute.before."
+      "note": "`permission.ask` is declared in the plugin types and never fired by the shipped binary — confirmed three ways, including a live plugin exporting it against a real permission request that was raised and resolved without it. The official docs have quietly stopped listing it."
     }
   },
-
   "failure": {
     "onCrash": {
       "value": "open",
@@ -37,39 +43,67 @@
       "note": "There is no timeout and none is configurable. Plugin.trigger awaits each hook serially with no deadline, so a hung hook hangs the agent indefinitely. Verified live."
     },
     "timeoutDefaultSeconds": null,
-    "canFailClosed": { "value": false, "evidence": "probe" }
+    "canFailClosed": {
+      "value": false,
+      "evidence": "probe"
+    }
   },
-
   "interception": {
     "shell": {
       "value": "partial",
       "evidence": "probe",
       "note": "tool.execute.before covers model-invoked tools, but POST /session/{id}/shell executes a shell command with no permission check and no event at all. Verified live against a config that denied `rm *`."
     },
-    "fileRead": { "value": "observed", "evidence": "source" },
-    "fileWrite": { "value": "observed", "evidence": "source" },
-    "fileDelete": { "value": "observed", "evidence": "source" },
-    "mcp": { "value": "observed", "evidence": "source" },
-    "subagentSpawn": { "value": "unknown", "evidence": "unknown" },
-    "network": { "value": "unknown", "evidence": "unknown" }
+    "fileRead": {
+      "value": "observed",
+      "evidence": "source"
+    },
+    "fileWrite": {
+      "value": "observed",
+      "evidence": "source"
+    },
+    "fileDelete": {
+      "value": "observed",
+      "evidence": "source"
+    },
+    "mcp": {
+      "value": "observed",
+      "evidence": "source"
+    },
+    "subagentSpawn": {
+      "value": "unknown",
+      "evidence": "unknown"
+    },
+    "network": {
+      "value": "unknown",
+      "evidence": "unknown"
+    }
   },
-
   "observation": {
-    "postToolUse": { "value": true, "evidence": "source", "note": "tool.execute.after." },
-    "firesOnFailure": { "value": "unknown", "evidence": "unknown" },
+    "postToolUse": {
+      "value": true,
+      "evidence": "source",
+      "note": "tool.execute.after."
+    },
+    "firesOnFailure": {
+      "value": "unknown",
+      "evidence": "unknown"
+    },
     "canModifyInput": {
       "value": true,
       "evidence": "probe",
       "note": "Mutating output.args in place rewrites what executes AND what the permission engine then evaluates — which is a capability and a hazard, since it lets a plugin launder a command past the ruleset."
     }
   },
-
   "modes": {
-    "exposesMode": { "value": false, "evidence": "probe", "note": "No hook input carries a permission mode." },
+    "exposesMode": {
+      "value": false,
+      "evidence": "probe",
+      "note": "No hook input carries a permission mode."
+    },
     "known": [],
     "askSurvives": []
   },
-
   "upstreamLimitations": [
     "permission.ask is declared in the plugin types and never fired. Building on it would produce an adapter that appears installed and enforces nothing.",
     "A plugin that fails to load is silently skipped, with no warning, and the agent runs unpoliced.",
@@ -77,7 +111,6 @@
     "POST /session/{id}/shell runs commands with no permission check and no event.",
     "Mutating tool args in a plugin changes what the permission engine evaluates, so plugin order decides the verdict."
   ],
-
   "leastgrantLimitations": [
     "No adapter ships. This file records a completed evaluation, not a supported integration.",
     "Revisit if OpenCode wires permission.ask to the permission engine, which would make a faithful adapter straightforward."
