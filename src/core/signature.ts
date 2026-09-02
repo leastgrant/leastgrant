@@ -345,9 +345,37 @@ function shapeValue(v: unknown, ctx: SignatureCtx, depth: number, secretish: boo
   if (Array.isArray(v)) {
     if (!v.length) return '<list>';
     if (depth >= 2) return '<list>';
-    // The element shape of the first entry, not every entry: a 500-item batch
-    // must not produce a 500-fragment signature.
-    return `<list of ${shapeValue(v[0], ctx, depth + 1, secretish, freetext)}>`;
+    // The DISTINCT element shapes, not the first one.
+    //
+    // It used to be `shapeValue(v[0], …)`, on the reasoning that a 500-item
+    // batch must not produce a 500-fragment signature. That reasoning is right
+    // and the implementation threw away the security content of the list:
+    // everything after index zero was invisible. So
+    //
+    //   read_multiple_files({paths: ['src/a.ts', '~/.ssh/id_rsa']})
+    //
+    // signed byte-identically to a read of two project files, and a dozen
+    // approvals of the ordinary batch promoted the one with the key in it. A
+    // secret in position ZERO did change the signature, which is the tell: the
+    // distinction was always meant to survive templating and simply stopped at
+    // the first element.
+    //
+    // Distinct shapes keep the size property that motivated the original —
+    // a uniform batch of any length is still one fragment, because every
+    // element reduces to the same string — while a batch that mixes an
+    // ordinary path with a credential can no longer wear the ordinary one's
+    // identity. Sorted so element order cannot mint a second identity for the
+    // same set, and capped so a deliberately heterogeneous list cannot grow the
+    // signature without bound.
+    const shapes = new Set<string>();
+    for (const el of v) {
+      shapes.add(shapeValue(el, ctx, depth + 1, secretish, freetext));
+      if (shapes.size > 4) {
+        shapes.add('<mixed>');
+        break;
+      }
+    }
+    return `<list of ${[...shapes].sort().join('|')}>`;
   }
   if (depth >= 2) return '<obj>';
   const inner = shapeObject(v as Record<string, unknown>, ctx, depth + 1);

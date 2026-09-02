@@ -90,15 +90,31 @@ function judge(command: string, ctx: ReturnType<typeof trainedOn>): Verdict {
  */
 function judgeWire(b: BypassCase, ctx: ReturnType<typeof trainedOn>): Verdict {
   const wire = b.wire!;
-  assert.equal(wire.agent, 'codex', `no adapter wired up for ${wire.agent} in the corpus runner`);
-  const tool = toolNameOf(wire.tool);
-  const t = translate({ tool_input: wire.toolInput, tool_name: wire.tool, cwd: WORKSPACE }, tool);
-  assert.ok(t.ok, `${b.id}: the adapter could not translate its own agent's payload (${String(t.why)})`);
+  assert.ok(
+    wire.agent === 'codex' || wire.agent === 'claude-code',
+    `no adapter wired up for ${wire.agent} in the corpus runner`,
+  );
+
+  // Claude Code does not translate: its payload IS the engine's shape, which is
+  // why it is the reference implementation. Routing these through a no-op keeps
+  // the case in the same runner as every other, so an MCP payload is judged by
+  // the same path a shell one is rather than by a second harness that could
+  // drift from it.
+  const tool = wire.agent === 'codex' ? toolNameOf(wire.tool) : wire.tool;
+  const input =
+    wire.agent === 'codex'
+      ? (() => {
+          const t = translate({ tool_input: wire.toolInput, tool_name: wire.tool, cwd: WORKSPACE }, tool);
+          assert.ok(t.ok, `${b.id}: the adapter could not translate its own agent's payload (${String(t.why)})`);
+          return { input: t.input, cwd: t.execCwd || WORKSPACE };
+        })()
+      : { input: wire.toolInput, cwd: WORKSPACE };
+
   const req: Request = {
     agent: wire.agent,
     tool,
-    input: t.input,
-    cwd: t.execCwd || WORKSPACE,
+    input: input.input,
+    cwd: input.cwd,
     sessionId: 'attack',
     at: Date.now(),
   };
@@ -152,7 +168,7 @@ interface BypassCase {
    * Both directions are a real assertion: see the `identities` block in the
    * corpus.
    */
-  identity?: 'same' | 'distinct';
+  identity?: 'same' | 'distinct' | 'no-text-form';
 }
 
 const CORPUS: {
@@ -284,6 +300,12 @@ describe('a payload shape is the action it describes, not a shape near it', () =
 
   for (const b of wireCases) {
     test(`${b.id} — ${b.identity} as the command text`, () => {
+      // Some payloads have no command text to be the same as or distinct from.
+      // An MCP call is the case: the tool name is the whole invocation and the
+      // arguments are arbitrary JSON, so there is no shell string that means
+      // the same thing. Those cases still assert their verdict above; there is
+      // simply no second spelling to compare a signature against.
+      if (b.identity === 'no-text-form') return;
       const wire = b.wire!;
       const tool = toolNameOf(wire.tool);
       const t = translate({ tool_input: wire.toolInput, tool_name: wire.tool, cwd: WORKSPACE }, tool);

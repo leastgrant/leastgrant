@@ -1107,15 +1107,35 @@ function analyzeStructured(
     // whatever it is asked to do — the widest collision the system had.
     const argShape = mcpArgSignature(input, sctx, req.tool);
 
+    // Any path an argument names, so the credential floor has something to fire
+    // on.
+    //
+    // An MCP call used to produce exactly one target — the server — and
+    // `exposure: 'none'`, unconditionally. `guard.secret-read` is gated on
+    // exposure or capability, so it could not fire for an MCP call at all, and
+    // there was no backstop anywhere: a filesystem MCP server reading
+    // `~/.ssh/id_rsa` was a `mcp.call` to `filesystem` and nothing more.
+    //
+    // That mattered most in combination with the batch-signature bug fixed in
+    // signature.ts, but it is a hole on its own. The engine already knows how
+    // to recognise a credential path; the MCP branch simply never handed it
+    // one. It does now, and if any of them is a credential the call is a
+    // credential read, whatever the tool is called.
+    const paths = mcpPathArguments(input, sctx);
+    const targets: Target[] = [{ type: 'service', value: server }, ...paths];
+    const readsSecret = paths.some((t) => t.secret);
+
     return {
       kind: 'mcp',
-      capability: 'mcp.call',
+      capability: readsSecret ? 'secret.read' : 'mcp.call',
       signature: `${req.tool}${argShape}`,
       display: `${req.tool}${argShape}`,
-      blast,
-      targets: [{ type: 'service', value: server }],
+      blast: readsSecret ? { ...blast, exposure: 'reads-secrets' } : blast,
+      targets,
       understood: true,
-      notes: [note],
+      notes: readsSecret
+        ? [note, 'one of the paths in this call is a credential file']
+        : [note],
     };
   }
 
@@ -1311,3 +1331,55 @@ function renderArgv(argv: string[], root: string): string {
     })
     .join(' ');
 }
+
+/**
+ * Every path an MCP call's arguments name, at any depth.
+ *
+ * MCP arguments are arbitrary JSON and their key names are the server's
+ * business, not ours, so this is shape-driven rather than key-driven: any
+ * string anywhere in the payload that looks like a path is resolved and
+ * checked. `looksLikePath` is the same predicate the signature templater
+ * already uses to decide whether a string is a path, so a value that gets
+ * templated as `<path:secret>` in the identity is a path target here too —
+ * the two cannot drift apart and disagree about what a credential is.
+ *
+ * Bounded, because a payload is attacker-shaped: a batch of a thousand files
+ * should not turn one permission check into a thousand path resolutions on the
+ * hot path. The cap is generous next to any real batch, and it is a cap on the
+ * targets *reported*, not on the check — a credential anywhere in the first
+ * few hundred entries still marks the call.
+ */
+function mcpPathArguments(input: Record<string, unknown>, sctx: SignatureCtx): Target[] {
+  const out: Target[] = [];
+  const seen = new Set<string>();
+  let budget = 256;
+
+  const walk = (v: unknown, depth: number): void => {
+    if (budget <= 0 || depth > 4) return;
+    if (typeof v === 'string') {
+      budget -= 1;
+      if (!sctx.looksLikePath(v)) return;
+      const abs = sctx.resolve(v);
+      if (!abs || seen.has(abs)) return;
+      seen.add(abs);
+      out.push({
+        type: 'path',
+        value: abs,
+        inWorkspace: sctx.inWorkspace(abs),
+        secret: sctx.isSecret(abs),
+      });
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const el of v) walk(el, depth + 1);
+      return;
+    }
+    if (v && typeof v === 'object') {
+      for (const el of Object.values(v as Record<string, unknown>)) walk(el, depth + 1);
+    }
+  };
+
+  walk(input, 0);
+  return out;
+}
+

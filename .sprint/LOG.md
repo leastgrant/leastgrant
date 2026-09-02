@@ -147,7 +147,50 @@ Claims in our docs that upstream evidence contradicts (must fix before release):
   codes for a `guard.` prefix. It should read `flooredGuards` instead. The data
   is there now; the adapter migration was left to the in-flight cluster.
 
+## ALL SIX CRITICALS CLOSED AND MERGED (main @ ed0dd98)
+
+Every cluster from the audits is landed. 1602 core + 208 site tests green.
+`node .sprint/verify-criticals.mjs` re-checks all of them against merged main
+in one pass and prints "all clear" - run that first after any core change.
+
+| cluster        | what it was                                    | merged |
+|----------------|------------------------------------------------|--------|
+| guards-secrets | `grep -r ~`, SAM case-fold, control files      | dec7fe7 |
+| session-race   | lock-free RMW lost the taint set, 8/25 @ 30x   | 6532b61 |
+| codex-wire     | argv array untranslated + `default` abstained  | b602f23 |
+| shell-unwrap   | 5 ways derived command text escaped analysis   | d07d116 |
+| paths-floor    | unplaceable path switched off every floor      | af2ac1f |
+| aggregation    | taint + floor read off the elected action only | f49940b |
+
+Two things I changed against the fixing agent's judgement, both recorded in the
+commits: Codex `default` now denies a FLOORED action (their reasoning was about
+unfamiliar actions, and that branch only fires on floors), and `engine.error`
+still denies there too (I briefly exempted it so a LeastGrant bug could not take
+Codex down, then reverted - the justification was "default might still prompt",
+which is the reasoning the whole change rejects).
+
+Conformance suite now green at 31/31 and is what caught the Codex `default`
+hole, by deriving expectations from compatibility/*.json rather than restating
+them. `.sprint/finding-codex-default.md` has the write-up.
+
+## STILL OPEN
+
+**NEW CRITICAL from attack wave 2, not yet fixed** (wf_be8072c8-12c, reproduced
+4 independent ways incl. through the shipped binary):
+MCP batch reads sign on the FIRST list element only. `shapeValue` at
+src/core/signature.ts:333 uses `v[0]`, so
+`read_multiple_files({paths:['src/a.ts','~/.ssh/id_rsa']})` is byte-identical to
+a benign batch. MCP calls also emit no path targets and exposure is always
+'none' (classify.ts ~975), so `guard.secret-read` cannot fire as a backstop, and
+bundles.ts:151's credential filter is inert for the same reason. The `init`
+bundle offers that signature for a one-click grant. Full detail in the task
+output for wi37lhlfq. THIS IS THE NEXT THING TO FIX.
+
+Attack wave 2 also returned other findings whose verifiers died on the budget
+wall - they are unconfirmed and must not be treated as real without repro.
+
 ## IN FLIGHT
+
 - wf_de8f9282-668 **criticals campaign** (relaunched after the quota reset
   killed the first attempt): shell-unwrap, paths-floor, session-race,
   codex-wire, each in a worktree, each with an independent verifier.
