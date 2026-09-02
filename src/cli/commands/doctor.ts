@@ -38,11 +38,12 @@ import { displayPath } from '../../core/paths.js';
 import { listEnvelopes, readLedger, stateDir } from '../../store/index.js';
 import { loadContext } from '../context.js';
 import { claudeSettingsPath } from './install.js';
+import { loadCompatibility, assess, LEVEL_MEANING } from '../../core/compatibility.js';
 import { ago, c, para, plural, rule, sym, term, truncate, width } from '../ui.js';
 import type { Argv } from '../index.js';
 
 type Status = 'ok' | 'warn' | 'bad' | 'info';
-type Group = 'setup' | 'exposure' | 'habits';
+type Group = 'setup' | 'enforcement' | 'exposure' | 'habits';
 
 interface Check {
   id: string;
@@ -97,6 +98,7 @@ export function doctorCommand(argv: Argv): number {
 
   const checks: Check[] = [
     ...setupChecks(site, wantFix),
+    ...enforcementChecks(),
     ...exposureChecks(site, ledger),
     ...habitChecks(site, ledger, now),
   ];
@@ -126,6 +128,63 @@ export function doctorCommand(argv: Argv): number {
 function flag(argv: Argv, name: string): boolean {
   const v = argv.flags[name];
   return v !== undefined && v !== false && v !== 'false' && v !== '0';
+}
+
+/**
+ * What LeastGrant can actually enforce, agent by agent.
+ *
+ * This is the section people should read before trusting the tool, and it is
+ * the one a support table is worst at telling honestly, because the interesting
+ * content is all limitations and a limitation renders naturally as an absence.
+ *
+ * Everything here is derived from `compatibility/*.json` through `assess()` in
+ * core, which the website also calls. Nothing about an agent is written down
+ * twice, so the CLI and the site cannot come to disagree about the same agent.
+ *
+ * It reports on every agent LeastGrant knows about, not only the installed
+ * ones. Someone deciding whether to switch editors wants to know what they
+ * would lose, and that question is asked before the install, not after.
+ */
+function enforcementChecks(): Check[] {
+  const agents = loadCompatibility();
+  if (!agents.length) {
+    return [
+      {
+        id: 'enforcement.missing',
+        group: 'enforcement',
+        status: 'warn',
+        title: 'the compatibility data is missing from this install',
+        detail:
+          'LeastGrant cannot say what it enforces on each agent without it. This usually means a packaging problem rather than anything wrong on your machine.',
+      },
+    ];
+  }
+
+  const checks: Check[] = [];
+  for (const agent of agents) {
+    const { level, findings } = assess(agent);
+
+    // The headline status is the worst thing found, so an agent with one real
+    // hole cannot read as healthy because four other lines were fine.
+    const status: Status =
+      level === 'none' ? 'info'
+      : findings.some((f) => f.status === 'bad') ? 'bad'
+      : findings.some((f) => f.status === 'warn') ? 'warn'
+      : 'ok';
+
+    checks.push({
+      id: `enforcement.${agent.id}`,
+      group: 'enforcement',
+      status,
+      title: `${agent.name}: ${level} — ${LEVEL_MEANING[level]}`,
+      detail: findings
+        .filter((f) => f.status !== 'info')
+        .map((f) => `${f.status === 'ok' ? '·' : '!'} ${f.text}`)
+        .join('\n'),
+    });
+  }
+
+  return checks;
 }
 
 /**
@@ -977,6 +1036,7 @@ function latest(entries: LedgerEntry[]): number | null {
 
 const GROUPS: { id: Group; label: string }[] = [
   { id: 'setup', label: 'setup' },
+  { id: 'enforcement', label: 'what actually gets enforced, per agent' },
   { id: 'exposure', label: 'what your agents can reach' },
   { id: 'habits', label: 'habits' },
 ];
@@ -1042,7 +1102,14 @@ function render(checks: Check[], counts: Record<Status, number>, wantFix: boolea
       for (const line of title.slice(1)) out.push(gutter + style(line));
 
       if (ch.detail) {
-        for (const line of wrapText(ch.detail, BODY)) out.push(gutter + c.gray(line));
+        // Wrap each line of the detail separately, so a check that deliberately
+        // returns several lines keeps them. Most details are one sentence and
+        // are unaffected; the per-agent enforcement check is a list of findings,
+        // and flowing those into a paragraph ran "deny is enforced" and "an ask
+        // degrades" together into something that read as one thought.
+        for (const para of ch.detail.split('\n')) {
+          for (const line of wrapText(para, BODY)) out.push(gutter + c.gray(line));
+        }
       }
 
       if (ch.fix) {
