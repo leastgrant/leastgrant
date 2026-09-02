@@ -29,7 +29,7 @@ import {
   displayPath,
   type CanonicalPath,
 } from './paths.js';
-import { classifySecretPath, redact, secretSubstrings } from './secrets.js';
+import { classifySecretPath, credentialTreeRoot, redact, secretSubstrings } from './secrets.js';
 import { assignmentSignature, commandSignature, mcpArgSignature, normalizeArg, toolSignature, type SignatureCtx } from './signature.js';
 import { toBlast, type Judgement, type KnowledgeCtx, type ProgramKnowledge } from './knowledge/types.js';
 import { coreutils } from './knowledge/coreutils.js';
@@ -203,8 +203,9 @@ function analyzeRaw(req: Request, ctx: AnalyzeCtx): Analysis {
   const resolve = (arg: string): string => riskiest(canonicalize(arg, req.cwd), roots, ctx.secretPatterns);
   const inWs = (abs: string): boolean => pathInWorkspace(abs, roots);
   const isSecret = (abs: string): boolean => classifySecretPath(abs, ctx.secretPatterns).secret;
+  const isTree = (abs: string): boolean => !inWs(abs) && credentialTreeRoot(abs).secret;
 
-  const kctx: KnowledgeCtx = { cwd: req.cwd, roots: ctx.roots, resolve, inWorkspace: inWs, isSecret };
+  const kctx: KnowledgeCtx = { cwd: req.cwd, roots: ctx.roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree: isTree };
   const sctx: SignatureCtx = { resolve, inWorkspace: inWs, isSecret, looksLikePath };
 
   const kind = normalizeTool(req.tool);
@@ -384,8 +385,10 @@ function contextFor(
   const inWs = (abs: string): boolean => (isUnplaceable(abs) ? false : pathInWorkspace(abs, roots));
   const isSecret = (abs: string): boolean =>
     isUnplaceable(abs) ? false : classifySecretPath(abs, secretPatterns).secret;
+  const isCredentialTree = (abs: string): boolean =>
+    !isUnplaceable(abs) && !inWs(abs) && credentialTreeRoot(abs).secret;
   return {
-    kctx: { cwd, roots, resolve, inWorkspace: inWs, isSecret },
+    kctx: { cwd, roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree },
     sctx: { resolve, inWorkspace: inWs, isSecret, looksLikePath },
   };
 }
@@ -412,8 +415,10 @@ function unknownCwdContext(
   const inWs = (abs: string): boolean => (isUnplaceable(abs) ? false : pathInWorkspace(abs, roots));
   const isSecret = (abs: string): boolean =>
     isUnplaceable(abs) ? false : classifySecretPath(abs, secretPatterns).secret;
+  const isCredentialTree = (abs: string): boolean =>
+    !isUnplaceable(abs) && !inWs(abs) && credentialTreeRoot(abs).secret;
   return {
-    kctx: { cwd: '', roots, resolve, inWorkspace: inWs, isSecret },
+    kctx: { cwd: '', roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree },
     sctx: { resolve, inWorkspace: inWs, isSecret, looksLikePath },
   };
 }
@@ -477,6 +482,18 @@ function buildShellAction(
 
   const blast = toBlast(j);
   const targets = collectTargets(argv, j, kctx, root);
+
+  // A judgement that says "this exposes credentials" but whose targets say no
+  // path holds any leaves `guard.secret-read` with nothing to name, so it falls
+  // back to "this reads something that holds credentials". That is the shape of
+  // a recursive sweep — `grep -r pat ~` exposes `~/.ssh` without naming it — so
+  // the directory the walk starts from is marked here, and the explanation can
+  // point at it.
+  if (blast.exposure === 'reads-secrets' && !targets.some((t) => t.secret)) {
+    for (const t of targets) {
+      if (t.type === 'path' && t.value && kctx.isCredentialTree(t.value)) t.secret = true;
+    }
+  }
 
   // Paths named by a wrapper we peeled — the tree `find` walks, for instance.
   for (const p of eff.wrapperPaths ?? []) {
@@ -857,16 +874,27 @@ function analyzeStructured(
     const secretHere =
       (abs ? kctx.isSecret(abs) : false) ||
       (showsContent && glob ? kctx.isSecret(kctx.resolve(glob)) : false);
-    if (secretHere || (showsContent && abs && kctx.isSecret(abs))) {
+    // A content search descends. `Grep {path: "~/.ssh", output_mode: "content"}`
+    // was floored and `Grep {path: "~", output_mode: "content"}` — which reads
+    // `~/.ssh` and `~/.aws` and every `.env` on the machine — was not, because
+    // the judgement asked only whether the one named directory was itself a
+    // credential store. Naming the parent was enough to turn a deny into an
+    // abstain on the adapters that do not prompt.
+    const sweeps = Boolean(showsContent && abs && kctx.isCredentialTree(abs));
+    if (secretHere || (showsContent && abs && kctx.isSecret(abs)) || sweeps) {
       return {
         kind: 'file.read',
         capability: 'secret.read',
         signature: toolSignature(req.tool, [normalizeArg(subject, sctx), showsContent ? 'content' : 'names']),
         display: `${req.tool} in ${abs ? displayPath(abs, root) : where}`,
-        blast: { reach: 'machine', reversibility: 'trivial', exposure: 'reads-secrets', scale: 'many' },
+        blast: { reach: 'machine', reversibility: 'trivial', exposure: 'reads-secrets', scale: sweeps ? 'sweeping' : 'many' },
         targets: abs ? [{ type: 'path', value: abs, inWorkspace: inside, secret: true }] : [],
         understood: true,
-        notes: ['this prints the contents of a file that holds credentials'],
+        notes: [
+          sweeps && !secretHere
+            ? 'this prints the contents of every file under a directory that holds credentials'
+            : 'this prints the contents of a file that holds credentials',
+        ],
       };
     }
 

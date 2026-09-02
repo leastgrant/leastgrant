@@ -95,9 +95,14 @@ const CONTROL_FILES = [
   // comparing, so a capitalised entry here can never match anything. These two
   // were dead for exactly that reason — the instruction files that steer every
   // future agent session were the only control files not actually guarded.
+  //
+  // The rest of this family is matched by shape rather than spelled out, in
+  // AGENT_INSTRUCTION below; see the note there for why.
   'agents.md',
+  'agent.md',
   'claude.md',
-  '.cursorrules',
+  'claude.local.md',
+  'gemini.md',
   // Slash commands and subagent definitions are prompts an agent will later
   // execute as instructions — editing one steers every future session.
   '.claude/commands',
@@ -121,9 +126,56 @@ const CONTROL_FILES = [
   'managed-settings.json',
 ];
 
+/**
+ * Agent-instruction files, matched by shape rather than by vendor.
+ *
+ * The literal list above records the spellings that existed when it was
+ * written. Vendors have since moved almost all of them: Cursor's `.cursorrules`
+ * became `.cursor/rules/*.mdc`, Copilot's instructions are
+ * `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md`,
+ * Claude Code grew `.claude/rules/` and `.claude/output-styles/`, and Windsurf,
+ * Cline, Roo and Devin each ship their own `.x/rules/` directory. Every one of
+ * those was silently ALLOWed, and — because an in-project write signs as the
+ * same `Write(<path>)` as editing any source file — a handful of approvals of
+ * ordinary source edits paid for them.
+ *
+ * Adding the current spellings to the list would fix today's names and be
+ * stale again by the next rename. These three patterns are the shapes the
+ * whole industry has converged on:
+ *
+ *  1. a dotfile whose name ends in `rules` (`.cursorrules`, `.windsurfrules`,
+ *     `.clinerules`, `.roorules`, `.continuerules`, Zed's `.rules`) — as a file
+ *     or, increasingly, as a directory of them;
+ *  2. anything under a vendor dot-directory's instruction surface
+ *     (`.cursor/rules`, `.claude/rules`, `.github/instructions`,
+ *     `.devin/rules`, `.codex/prompts`, …);
+ *  3. an instruction file recognised by its suffix (`*.instructions.md`,
+ *     `*-instructions.md`, `*.prompt.md`, `*.chatmode.md`, `*.mdc`).
+ *
+ * Deliberately not here: `Makefile`, `justfile`, `Taskfile.yml`, `noxfile.py`,
+ * `setup.py` and `build.rs`. They look like the same "an approved command runs
+ * this later" case as `package.json`, but `make`, `just`, `task`, `nox` and
+ * `setup.py` are opaque runners that never become approvable in the first
+ * place, so poisoning their config buys an attacker nothing that is cashable —
+ * and flooring them would put a prompt on an extremely common edit. Measured
+ * before deciding; see the test named for it.
+ */
+const RULES_DOTFILE = /^\.[a-z0-9._-]*rules$/;
+const AGENT_SURFACE_DIR =
+  /(?:^|\/)\.[a-z0-9_-]+\/(?:rules?|commands?|agents?|subagents?|skills?|prompts?|instructions?|chatmodes?|modes?|output-styles?|workflows?|hooks?)(?:\/|$)/;
+const AGENT_INSTRUCTION_SUFFIX = /(?:\.(?:instructions|prompt|chatmode)\.md|-instructions\.md|\.mdc)$/;
+
+const isAgentInstruction = (p: string): boolean => {
+  if (AGENT_SURFACE_DIR.test(p)) return true;
+  if (AGENT_INSTRUCTION_SUFFIX.test(p)) return true;
+  // As a file, or as any segment of the path when it is a directory of rules.
+  return p.split('/').some((seg) => RULES_DOTFILE.test(seg));
+};
+
 const isControlFile = (abs: string): boolean => {
   const p = abs.replace(/\\/g, '/').toLowerCase();
-  return CONTROL_FILES.some((c) => p.endsWith('/' + c) || p.includes('/' + c + '/'));
+  if (CONTROL_FILES.some((c) => p.endsWith('/' + c) || p.includes('/' + c + '/'))) return true;
+  return isAgentInstruction(p);
 };
 
 const isPersistence = (abs: string): boolean => {

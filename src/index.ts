@@ -111,7 +111,14 @@ export {
   type CanonicalPath,
   type PathIO,
 } from './core/paths.js';
-export { classifySecretPath, containsSecretLike, globMatch, redact, type SecretMatch } from './core/secrets.js';
+export {
+  classifySecretPath,
+  containsSecretLike,
+  credentialTreeRoot,
+  globMatch,
+  redact,
+  type SecretMatch,
+} from './core/secrets.js';
 export { commandSignature, familyOf, normalizeArg, toolSignature, type SignatureCtx } from './core/signature.js';
 
 // --- state -----------------------------------------------------------------

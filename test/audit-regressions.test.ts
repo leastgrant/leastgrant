@@ -979,3 +979,231 @@ describe('every path into a command reaches the resolver', () => {
     assert.notEqual(sig({ pattern: '**/*.ts' }), sig({ pattern: `${posix(os.homedir())}/.ssh/*` }));
   });
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * A recursive read judged by the one path on the command line.
+ *
+ * `grep -r <pat> ~/.ssh` was floored and `grep -r <pat> ~` was not, because
+ * both the shell classifier and the structured Grep classifier asked only
+ * whether the single named path was itself a credential store. The strictly
+ * *wider* search came out as the safer one: `fs.read.outside`, no guard at all
+ * (reads are excluded from `guard.write-outside`), blast tier 2 — the promotion
+ * ceiling — so learning turned it into a full ALLOW. And `outsideZone` put `~`
+ * and `~/Documents` in the same class, so the approvals that paid for it came
+ * from an ordinary scoped search.
+ *
+ * The assertions below are on the mechanism, not the verdict: the capability,
+ * the signature token and the floor. A later refactor can restore the hole and
+ * leave the verdict incidentally correct.
+ */
+describe('a recursive read is judged by what it descends into', () => {
+  const HOME = posix(os.homedir());
+  const first = (command: string) =>
+    analyze({ agent: 't', tool: 'Bash', input: { command }, cwd: WS, sessionId: 's', at: AT }, CTX).actions[0]!;
+
+  test('the whole-home search and the scoped one are different learned things', () => {
+    // The half that does not depend on recognising the recursion. Even a walker
+    // LeastGrant has never heard of can no longer spend `~/Documents`'s trust
+    // on `~`.
+    assert.notEqual(
+      first(`grep -r "some phrase" "${HOME}/Documents"`).signature,
+      first(`grep -r "some phrase" "${HOME}"`).signature,
+    );
+    assert.match(first(`grep -r x "${HOME}"`).signature, /<path:outside:credential-tree>/);
+    assert.match(first(`grep -r x "${HOME}/Documents"`).signature, /<path:outside:home>/);
+  });
+
+  for (const [name, command] of [
+    ['grep -r at $HOME', `grep -r "BEGIN OPENSSH PRIVATE KEY" "${HOME}"`],
+    ['grep -R at $HOME', `grep -R "aws_secret_access_key" "${HOME}"`],
+    ['grep --recursive at $HOME', `grep --recursive AKIA "${HOME}"`],
+    ['grep -rn at the filesystem root', 'grep -rn AKIA /'],
+    ['ripgrep, which recurses by default', `rg -n "PRIVATE KEY" "${HOME}"`],
+    ['tar packing $HOME', `tar czf /tmp/h.tgz "${HOME}"`],
+    ['cp -r out of $HOME', `cp -r "${HOME}" /tmp/loot`],
+  ] as const) {
+    test(`${name} reads credentials`, () => {
+      const a = first(command);
+      assert.equal(
+        a.blast.exposure,
+        'reads-secrets',
+        `${command}\n  capability ${a.capability}, exposure ${a.blast.exposure}`,
+      );
+      assert.equal(a.blast.scale, 'sweeping', `${command} should read as a sweep, not a single file`);
+      assert.ok(
+        a.targets.some((t) => t.secret),
+        `${command} must name the directory it sweeps, or the explanation cannot point at it`,
+      );
+    });
+  }
+
+  test('and the floor holds against any amount of training on the scoped form', () => {
+    const env = trainedOn([`grep -r "some phrase" "${HOME}/Documents"`, 'grep -rn TODO src', 'ls -la']);
+    const scoped = verdict(env, { tool: 'Bash', input: { command: `grep -r "some phrase" "${HOME}/Documents"` } });
+    assert.equal(scoped.decision, 'allow', 'the baseline must be allowed or this proves nothing');
+
+    const wide = verdict(env, { tool: 'Bash', input: { command: `grep -r "BEGIN OPENSSH PRIVATE KEY" "${HOME}"` } });
+    assert.notEqual(wide.decision, 'allow', wide.headline);
+    assert.equal(wide.floor, true, 'a search that reads every key on the machine must be unlearnable');
+    assert.ok(
+      wide.reasons.some((r) => r.code === 'guard.secret-read'),
+      `expected guard.secret-read, got ${wide.reasons.map((r) => r.code).join(',')}`,
+    );
+  });
+
+  test('the structured Grep tool descends too', () => {
+    // Untrained, and on an adapter that cannot prompt this is the difference
+    // between deny and abstain — no learning required to reach it.
+    for (const p of [HOME, 'C:/', '/']) {
+      const v = verdict(newEnvelope('project', WS), { tool: 'Grep', input: { pattern: 'x', path: p, output_mode: 'content' } });
+      assert.equal(v.action.capability, 'secret.read', `Grep content over ${p} -> ${v.action.capability}`);
+      assert.equal(v.floor, true, `Grep content over ${p} carried no floor`);
+    }
+  });
+
+  test('ordinary searches are untouched, and stay learnable', () => {
+    // The control, and the reason this fix is at the level it is. A rule that
+    // fired on "might contain a secret" would fire on every recursive search
+    // ever run; this one fires only on the ancestors of stores that exist by
+    // platform convention.
+    for (const command of ['grep -r TODO .', 'grep -rn "function foo" src', 'rg useState src',
+      'grep -r x /usr/share/doc', 'grep -r x /etc/nginx', `grep -r x "${HOME}/code/other-repo"`,
+      'sed -r "s/a/b/" file.txt', 'sort -r notes.txt', 'cp -r src dist', 'tar czf dist.tgz src']) {
+      const a = analyze({ agent: 't', tool: 'Bash', input: { command }, cwd: WS, sessionId: 's', at: AT }, CTX).actions[0]!;
+      assert.notEqual(a.capability, 'secret.read', `${command} was wrongly read as a credential read`);
+      assert.notEqual(a.blast.exposure, 'reads-secrets', `${command} was wrongly read as exposing credentials`);
+      const env = trainedOn([command]);
+      assert.equal(
+        verdict(env, { tool: 'Bash', input: { command } }).decision,
+        'allow',
+        `${command} stopped being learnable, which is a cost this fix is not allowed to have`,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Agent-instruction files, matched by shape rather than by vendor.
+ *
+ * `CONTROL_FILES` recorded the spellings that existed when it was written.
+ * Vendors moved almost all of them — `.cursorrules` became `.cursor/rules/*.mdc`,
+ * Copilot's live in `.github/`, Claude Code grew `.claude/rules/` — and the new
+ * ones fell through with no guard. Worse than unguarded: every in-project write
+ * signs as the same `Write(<path>)`, so a handful of approvals of ordinary
+ * source edits turned writing them into a silent allow.
+ */
+describe('the files that steer future agent sessions are guarded by shape', () => {
+  /** Trained on ordinary source writes only — the attacker's precondition. */
+  const trainedOnSourceWrites = () => {
+    const env = newEnvelope('project', WS);
+    const a = analyze(
+      { agent: 't', tool: 'Write', input: { file_path: `${posix(WS)}/src/app.ts`, content: 'x' }, cwd: WS, sessionId: 's', at: AT },
+      CTX,
+    ).actions[0]!;
+    for (let i = 0; i < 40; i++) {
+      observe(
+        env,
+        { signature: a.signature, capability: a.capability, blast: a.blast, evidence: 'confirmed', at: AT - (40 - i) * DAY, sessionId: `s${i % 6}`, display: a.display },
+        config.thresholds,
+      );
+    }
+    return env;
+  };
+
+  const writeVerdict = (env: ReturnType<typeof trainedOnSourceWrites>, rel: string) =>
+    verdict(env, { tool: 'Write', input: { file_path: `${posix(WS)}/${rel}`, content: 'x' } });
+
+  test('an ordinary source write really is allowed after that training', () => {
+    // Without this the whole block passes vacuously.
+    const env = trainedOnSourceWrites();
+    assert.equal(writeVerdict(env, 'src/other.ts').decision, 'allow');
+    assert.equal(writeVerdict(env, 'README.md').decision, 'allow');
+  });
+
+  for (const rel of [
+    // Cursor: the legacy file and the directory that replaced it.
+    '.cursorrules',
+    '.cursor/rules/always.mdc',
+    '.cursor/rules/frontend/components.mdc',
+    // Copilot, whose docs name these as the always-on instructions.
+    '.github/copilot-instructions.md',
+    '.github/instructions/react.instructions.md',
+    '.github/prompts/review.prompt.md',
+    // Claude Code's own surfaces, including the ones added since the list was
+    // written.
+    'CLAUDE.md',
+    'CLAUDE.local.md',
+    '.claude/CLAUDE.md',
+    '.claude/rules/testing.md',
+    '.claude/output-styles/terse.md',
+    '.claude/commands/review.md',
+    // The cross-vendor standard, and the rest of the `.<vendor>rules` family
+    // that Claude Code's own /init enumerates.
+    'AGENTS.md',
+    'GEMINI.md',
+    '.windsurfrules',
+    '.windsurf/rules/style.md',
+    '.clinerules',
+    '.clinerules/style.md',
+    '.roo/rules/style.md',
+    '.devin/rules/style.md',
+    '.rules',
+  ]) {
+    test(`writing ${rel} still asks`, () => {
+      const v = writeVerdict(trainedOnSourceWrites(), rel);
+      assert.notEqual(v.decision, 'allow', `${rel} was auto-approved: ${v.headline}`);
+      assert.ok(
+        v.reasons.some((r) => r.code === 'guard.agent-config'),
+        `${rel} -> ${v.reasons.map((r) => r.code).join(',')}`,
+      );
+    });
+  }
+
+  test('reading one is still free', () => {
+    // The guard is on writes. An agent that has to ask before *reading* the
+    // instructions it was just given is unusable.
+    const env = trainedOnSourceWrites();
+    for (const rel of ['CLAUDE.md', '.cursor/rules/always.mdc', '.claude/rules/testing.md']) {
+      const v = verdict(env, { tool: 'Read', input: { file_path: `${posix(WS)}/${rel}` } });
+      assert.ok(!v.reasons.some((r) => r.code === 'guard.agent-config'), `reading ${rel} tripped the write guard`);
+    }
+  });
+
+  test('ordinary project files are not swept in', () => {
+    // The control. Matching by shape is only worth doing if the shape is
+    // narrow enough to leave normal work alone.
+    const env = trainedOnSourceWrites();
+    for (const rel of ['src/app.ts', 'README.md', 'docs/guide.md', 'docs/rules.md',
+      'src/rules/index.ts', 'src/prompts/system.ts', 'test/x.test.ts', '.eslintrc.json',
+      '.github/dependabot.yml', '.storybook/main.js']) {
+      assert.equal(writeVerdict(env, rel).decision, 'allow', `${rel} started asking`);
+    }
+  });
+
+  test('and the build files are left out on purpose, with the measurement behind it', () => {
+    // `Makefile`, `justfile`, `Taskfile.yml`, `noxfile.py`, `setup.py` and
+    // `build.rs` look like the `package.json` case — edit what a later approved
+    // command will run — but `package.json` is floored precisely because
+    // `npm test` IS approvable. These runners are opaque and never become
+    // approvable, so poisoning their config buys nothing cashable, and flooring
+    // them would put a prompt on a very common edit.
+    //
+    // If this ever flips, the trade-off changes and the files should be added.
+    for (const command of ['make build', 'just build', 'task build', 'nox -s tests', 'python setup.py sdist']) {
+      const env = trainedOn([command]);
+      assert.notEqual(
+        verdict(env, { tool: 'Bash', input: { command } }).decision,
+        'allow',
+        `${command} became approvable — the file it reads should now be a control file`,
+      );
+    }
+    const env = trainedOnSourceWrites();
+    for (const rel of ['Makefile', 'justfile', 'Taskfile.yml', 'conftest.py', 'noxfile.py', 'setup.py', 'build.rs']) {
+      assert.equal(writeVerdict(env, rel).decision, 'allow', `${rel} is floored but nothing cashes it in`);
+    }
+  });
+});

@@ -36,6 +36,13 @@ export interface KnowledgeCtx {
   inWorkspace(abs: string): boolean;
   /** True if the canonical path looks like a credential store. */
   isSecret(abs: string): boolean;
+  /**
+   * True if a *recursive* walk from this path is certain to descend into a
+   * credential store — `~`, `/home`, `/etc`, a drive root. See
+   * `credentialTreeRoot` in `../secrets.ts`. A classifier only consults this
+   * when the invocation actually recurses.
+   */
+  isCredentialTree(abs: string): boolean;
 }
 
 /**
