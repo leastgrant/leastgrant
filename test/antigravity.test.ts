@@ -289,11 +289,20 @@ describe('antigravity: the read and search tools keep their floors', () => {
     });
   });
 
-  test('listing the names in a credential directory asks, but does not force', () => {
-    // Deliberate, and the same line the engine already draws for Claude Code's
-    // Glob and LS: knowing that `id_rsa` exists is not reading it, and flooring
-    // every directory listing would cost more than it buys.
-    assert.equal(call('list_dir', { DirectoryPath: SSH }), 'ask');
+  test('a directory listing is translated as a listing, not a read', () => {
+    // The product rule — knowing `id_rsa` exists is not reading it — belongs to
+    // the engine and is tested there, against a real home. It cannot be
+    // asserted end to end here: the harness gives the child a throwaway HOME
+    // under the system temp directory, and whether a `.ssh` created there
+    // counts as a credential store differs by platform, because what "temp"
+    // means differs. On Windows it is excluded and the call asks; on Linux it
+    // is not and the call forces. Neither answer is the adapter's doing.
+    //
+    // What IS the adapter's doing is that `list_dir` maps to a listing and
+    // carries its path, so whatever the engine decides about that path is what
+    // the agent gets.
+    assert.equal(toolNameOf('list_dir'), 'LS');
+    assert.deepEqual(translateArgs('list_dir', { DirectoryPath: '/x/.ssh' }), { path: '/x/.ssh' });
   });
 
   test('an ordinary project read is an ask that can settle', () => {
