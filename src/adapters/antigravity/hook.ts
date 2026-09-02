@@ -93,24 +93,60 @@ interface AntigravityInput {
 }
 
 /**
- * There is no event name on the wire, and assuming one cost this adapter its
- * first release.
+ * Which event this is — and the payload cannot tell you.
  *
- * `hook_event_name` and `hookEventName` occur ZERO times in the 153 MB runtime.
- * The event is a protobuf *oneof* on HookArgs — pre_tool_hook_args against
- * post_tool_hook_args — so it is structural, never a string. The first version
- * of this file gated dispatch on that field, so the adapter never ran: every
- * tool call on Antigravity went unenforced, and the test suite was green
- * because it synthesised the field in all eleven cases.
+ * There is no event name on the wire. `hook_event_name` and `hookEventName`
+ * occur ZERO times in the 153 MB runtime; the event is a protobuf *oneof* on
+ * HookArgs, `pre_tool_hook_args` against `post_tool_hook_args`, so it is
+ * structural and never a string. The first version of this file gated dispatch
+ * on that field, so the adapter never ran: every tool call on Antigravity went
+ * unenforced, and the suite was green because it synthesised the field in all
+ * eleven cases.
  *
- * What distinguishes the two events is what the payload carries. PreToolUse has
- * `toolCall`; PostToolUse has `stepIdx` and an optional `error` and no
- * `toolCall` at all.
+ * The version after that routed on the presence of `toolCall`, on the belief
+ * that only PreToolUse carries one. That was also wrong. Symbolising the
+ * runtime gives:
+ *
+ *   PreToolHookArgs   tool_call(1)  step_idx(2)
+ *   PostToolHookArgs  step_idx(1)   tool_call(2)  error(3)  result(4)
+ *
+ * Both carry both. So every PostToolUse was being read as a PreToolUse: the
+ * action was judged a second time after it had already run, `{"decision":…}`
+ * went back where the contract wants `{}`, and — the quiet one — `recordPost`
+ * never ran, so no evidence was ever recorded on this agent. Nothing would ever
+ * have become familiar. That reads as caution and is a broken feedback loop.
+ *
+ * The fix does not look for a better field. LeastGrant writes hooks.json, so it
+ * can label its own handlers: the installer now writes `--event pre` and
+ * `--event post`, which is unambiguous and does not depend on payload
+ * archaeology surviving the next release.
+ *
+ * The shape fallback stays for installs written by an earlier version, where no
+ * label exists. `result` and `error` belong to PostToolUse alone, so their
+ * presence is decisive; their absence is not, which is exactly why the label
+ * exists and why `leastgrant install antigravity` retrofits it.
  */
-export function isPreToolUse(input: unknown): boolean {
+export function isPreToolUse(input: unknown, event?: string): boolean {
+  if (event === 'pre') return true;
+  if (event === 'post') return false;
   if (!input || typeof input !== 'object') return false;
-  const call = (input as Record<string, unknown>)['toolCall'];
+  const o = input as Record<string, unknown>;
+  if ('result' in o || 'error' in o) return false;
+  const call = o['toolCall'];
   return !!call && typeof call === 'object';
+}
+
+/**
+ * The value of `--event`, however it was written. Same two spellings as
+ * `--agent`, for the same reason.
+ */
+export function eventFlag(argv: string[] = process.argv): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === '--event') return argv[i + 1]?.toLowerCase();
+    if (arg.startsWith('--event=')) return arg.slice('--event='.length).toLowerCase();
+  }
+  return undefined;
 }
 
 /**
@@ -249,11 +285,13 @@ export function runAntigravityHook(raw: unknown): void {
   const cwd = roots[0] ?? process.cwd();
   const sessionId = input.conversationId || 'antigravity';
 
-  // PostToolUse. No `toolCall`, and the documented output is an EMPTY object —
-  // not a decision. `PostToolHookResult` is an empty message, so nothing said
-  // here can change anything; emitting a decision would be answering a question
-  // that was not asked.
-  if (!isPreToolUse(input)) {
+  // PostToolUse. The documented output is an EMPTY object — not a decision.
+  // `PostToolHookResult` is an empty message, so nothing said here can change
+  // anything; emitting a decision would be answering a question that was not
+  // asked. The event comes from the `--event` label the installer writes,
+  // because the payload carries `toolCall` on both events and cannot be used to
+  // tell them apart. See isPreToolUse.
+  if (!isPreToolUse(input, eventFlag())) {
     try {
       recordPost(sessionId, String(input.executionId ?? input.stepIdx ?? ''));
     } catch {

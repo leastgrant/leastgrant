@@ -74,6 +74,29 @@ export interface Verification {
   conformance: Run;
 }
 
+/**
+ * A path on disk that decides what this agent is allowed to do later.
+ *
+ * Separate from `configPath`, which is prose for a human and names only where
+ * LeastGrant installs itself. These are the files an attacker would rather have
+ * than any single tool call, and there are more of them than the install path:
+ * the host's own standing-grant store, its MCP wiring, the memory a later
+ * session is handed as context.
+ *
+ * Recorded here because a list of them living only in `guards.ts` is a list
+ * nobody updates when an adapter is added. `test/control-files.test.ts` walks
+ * these and requires each to hit `guard.agent-config`, so adding an entry adds
+ * the requirement, and adding an adapter without entries fails the docs guard.
+ */
+export interface ControlPath {
+  /** `~`- or `<repo>`-rooted, matching how the runtime itself spells it. */
+  path: string;
+  /** What it decides. One clause, addressed to somebody deciding whether to care. */
+  what: string;
+  /** Why it is worth a person, as a category. */
+  why: 'hook' | 'grant' | 'mcp' | 'instructions' | 'project' | 'settings';
+}
+
 export interface AgentCompatibility {
   id: string;
   name: string;
@@ -94,6 +117,8 @@ export interface AgentCompatibility {
   supported: 'shipped' | 'evaluated-not-yet-shipped' | 'evaluated-and-deferred';
   adapter: string | null;
   configPath?: string;
+  /** Everything on disk that decides what this agent may do later. See ControlPath. */
+  controlPaths?: ControlPath[];
   /** What the user types to wire it up. */
   install?: string;
   /** One line on how the integration attaches — the mechanism, not the verdict. */

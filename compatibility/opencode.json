@@ -138,5 +138,17 @@
       "blockedBy": "No adapter ships, so the conformance suite has nothing to drive. It would arrive with the adapter rather than after it — the suite fails a build where an adapter exists without a conformance shape, which is how Cursor was caught having never been tested."
     }
   },
-  "mechanism": "None. A plugin would attach through `tool.execute.before` and the permission reply endpoint; neither is sufficient. See deferredBecause."
+  "mechanism": "None. A plugin would attach through `tool.execute.before` and the permission reply endpoint; neither is sufficient. See deferredBecause.",
+  "controlPaths": [
+    {
+      "path": "~/.config/opencode/opencode.json",
+      "what": "the permission configuration, including any rule an evaluate-hook would run after",
+      "why": "settings"
+    },
+    {
+      "path": "<repo>/opencode.json",
+      "what": "the project-scoped version of the same",
+      "why": "settings"
+    }
+  ]
 }

@@ -728,7 +728,14 @@ function antigravity(scope: 'user' | 'project', uninstall: boolean): Installed {
       ? path.join(os.homedir(), '.gemini', 'config')
       : path.join(process.cwd(), '.agents');
   const file = path.join(dir, 'hooks.json');
-  const command = `${selfCommand()} --agent antigravity`;
+  // The event has to be written into the command, because the payload cannot
+  // say which one it is: `PreToolHookArgs` and `PostToolHookArgs` both carry
+  // `tool_call` and `step_idx`, so a shape test reads every PostToolUse as a
+  // PreToolUse. That silently stopped `recordPost` from ever running, which
+  // meant nothing on this agent ever became familiar. Labelling our own
+  // handlers is the fix; nothing about it depends on the payload.
+  const commandFor = (event: 'pre' | 'post') =>
+    `${selfCommand()} --agent antigravity --event ${event}`;
 
   interface Handler { command?: string; timeout?: number; [k: string]: unknown }
   interface Group { matcher?: string; hooks?: Handler[] }
@@ -739,6 +746,7 @@ function antigravity(scope: 'user' | 'project', uninstall: boolean): Installed {
   let changed = false;
 
   for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+    const command = commandFor(event === 'PreToolUse' ? 'pre' : 'post');
     const groups: Group[] = (spec[event] as Group[] | undefined) ?? [];
     // One group matching every tool. `*` is the documented catch-all and the
     // only honest choice: a matcher listing tool names would silently stop
@@ -766,7 +774,9 @@ function antigravity(scope: 'user' | 'project', uninstall: boolean): Installed {
       changed = true;
     } else if (group.hooks[idx]!.command !== command) {
       // Same refresh the other installers do: an entry of ours that names a
-      // stale path is worse than none, because it looks installed.
+      // stale path is worse than none, because it looks installed. This is also
+      // what retrofits `--event` onto an install written before the two events
+      // could be told apart — the same route the Cursor `failClosed` fix took.
       group.hooks[idx] = { ...group.hooks[idx], command, timeout: 10 };
       changed = true;
     }

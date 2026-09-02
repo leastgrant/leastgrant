@@ -158,5 +158,22 @@
     }
   },
   "mechanism": "Per-step command hooks in ~/.cursor/hooks.json, on the three before* gates plus two after* events for learning. On Windows the payload is delivered through PowerShell from a temp file rather than on stdin.",
-  "install": "leastgrant install cursor"
+  "install": "leastgrant install cursor",
+  "controlPaths": [
+    {
+      "path": "~/.cursor/hooks.json",
+      "what": "the per-step hooks LeastGrant registers",
+      "why": "hook"
+    },
+    {
+      "path": "~/.cursor/cli.json",
+      "what": "CLI-side permission configuration",
+      "why": "settings"
+    },
+    {
+      "path": "<repo>/.cursor/rules",
+      "what": "rules files a later session follows",
+      "why": "instructions"
+    }
+  ]
 }

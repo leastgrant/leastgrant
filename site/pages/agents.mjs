@@ -99,6 +99,24 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
   const askSurvives = Array.isArray(a.modes?.askSurvives) ? a.modes.askSurvives : [];
   const v = a.verification ?? {};
 
+  const CONTROL_KIND = {
+    hook: ['hook config', 'bad'],
+    grant: ['grant store', 'bad'],
+    mcp: ['MCP wiring', 'warn'],
+    instructions: ['instructions', 'warn'],
+    project: ['project', 'warn'],
+    settings: ['settings', 'warn'],
+  };
+
+  const controlRows = (a.controlPaths ?? [])
+    .map((cp) => {
+      const [word, tone] = CONTROL_KIND[cp.why] ?? [cp.why, 'warn'];
+      return `<tr><th><code>${esc(cp.path)}</code></th>` +
+        `<td class="v" data-tone="${attr(tone)}"><span>${esc(word)}</span></td>` +
+        `<td class="n">${esc(cp.what)}</td></tr>`;
+    })
+    .join('\n        ');
+
   const interceptRows = Object.entries(a.interception ?? {})
     .map(
       ([k, f]) => `<tr><th>${esc(humanise(k))}</th>${graded(a, 'interception', k)}<td class="n">${esc(
@@ -192,6 +210,24 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
         <thead><tr><th>tool class</th><th>coverage</th><th>detail</th></tr></thead>
         <tbody>
         ${interceptRows}
+        </tbody>
+      </table>
+
+      <h2 id="control">What decides this later</h2>
+      <p>The highest-value write on your machine is not any single tool call. It is the file that
+        settles what the agent may do <em>next</em> time — its hook configuration, its standing
+        permission grants, the servers it is wired to, the memory a later session is handed as
+        context. LeastGrant floors an agent write to every path below, so it always reaches a
+        person, and <code>test/control-files.test.ts</code> reads this same list and fails the
+        build if any of them stops being floored.</p>
+      <p>The list is longer than the install path on purpose. Three of these were found unfloored
+        by walking the list rather than reading it, and one of them — Antigravity's
+        <code>config.json</code> — holds the host's own &ldquo;Always allow&rdquo; grants, which
+        outlive uninstalling LeastGrant entirely.</p>
+      <table class="matrix">
+        <thead><tr><th>path</th><th>kind</th><th>what it decides</th></tr></thead>
+        <tbody>
+        ${controlRows}
         </tbody>
       </table>
 

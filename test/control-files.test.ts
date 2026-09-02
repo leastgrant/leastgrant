@@ -79,8 +79,104 @@ function write(file: string) {
   );
 }
 
-describe('the file that turns LeastGrant off', () => {
+/** A recorded control path, placed under a fake home or repo. */
+function place(p: string): string {
+  const rel =
+    p.startsWith('~/') ? p.slice(2)
+    : p.startsWith('<repo>/') ? p.slice(7)
+    : p;
+  const base = p.startsWith('~/') ? HOME : WS;
+  const abs = path.join(base, rel);
+  // A directory entry stands for everything under it, so probe a file inside.
+  return /\.(json|jsonc|toml|md|ya?ml)$/.test(abs) ? abs : path.join(abs, 'probe.json');
+}
+
+describe('everything that decides what an agent may do later', () => {
   const agents = loadCompatibility();
+
+  test('every agent records the paths that control it', () => {
+    // An adapter with no recorded control paths is an adapter whose off switch
+    // nobody has looked for. The list is not allowed to be empty and it is not
+    // allowed to be only the install path — Antigravity has ten, and the two
+    // that matter most are the host's own grant store and its MCP wiring,
+    // neither of which is where LeastGrant installs itself.
+    for (const a of agents) {
+      const cps = a.controlPaths ?? [];
+      assert.ok(cps.length > 0, `${a.id}: records no controlPaths`);
+      for (const cp of cps) {
+        assert.ok(cp.path && cp.what && cp.why, `${a.id}: incomplete control path ${JSON.stringify(cp)}`);
+        assert.ok(
+          cp.what.length > 20,
+          `${a.id}: "${cp.path}" does not say what it decides — a reader cannot judge a path from its name`,
+        );
+      }
+    }
+  });
+
+  test('every recorded control path is floored by guard.agent-config', () => {
+    // Derived from the records rather than restated, so adding an adapter adds
+    // the requirement. Checked against `flooredGuards` and not against the
+    // decision: `~/.gemini/config/config.json` produced an `ask` before this
+    // existed, from `guard.write-outside` plus a lucky filename match on the
+    // credentials heuristic. Outside-home writes share one signature, so
+    // approving any of them approves the class — and that file holds the
+    // host's own standing-grant list.
+    for (const a of agents) {
+      for (const cp of a.controlPaths ?? []) {
+        const v = write(place(cp.path));
+        assert.ok(
+          v.flooredGuards.includes('guard.agent-config'),
+          `${a.id}: writing ${cp.path} gave ${v.decision} with floors ` +
+            `[${v.flooredGuards.join(', ') || 'none'}] — it decides ${cp.what}`,
+        );
+      }
+    }
+  });
+
+  test('a grant store is never left to the credentials heuristic', () => {
+    // The narrow version of the above, kept separate because it is the one
+    // whose absence was worst. A file that can hand an agent standing approval
+    // must be floored for BEING that, not because its name looked like a
+    // secret — rename it and the accident stops working.
+    for (const a of agents) {
+      for (const cp of (a.controlPaths ?? []).filter((c) => c.why === 'grant' || c.why === 'mcp')) {
+        const v = write(place(cp.path));
+        assert.ok(
+          v.flooredGuards.includes('guard.agent-config'),
+          `${a.id}: ${cp.path} is a ${cp.why} store floored only by [${v.flooredGuards.join(', ')}]`,
+        );
+      }
+    }
+  });
+
+  test('the four Antigravity workspace roots are all floored, not just the documented one', () => {
+    // 2.11.0 loads workspace hooks from `.agents`, `_agents`, `.agent` and
+    // `_agent`, and from `plugins/<name>/hooks.json` besides. Only the first
+    // was covered; the other four were ordinary project files. A write to any
+    // of them installs a handler that runs on every later tool call, and one
+    // returning `auto_approve` switches enforcement off while LeastGrant still
+    // reports itself installed.
+    for (const rel of [
+      '.agents/hooks.json',
+      '_agents/hooks.json',
+      '.agent/hooks.json',
+      '_agent/hooks.json',
+      'plugins/anything/hooks.json',
+      '_agents/mcp_config.json',
+    ]) {
+      const v = write(path.join(WS, rel));
+      assert.ok(
+        v.flooredGuards.includes('guard.agent-config'),
+        `${rel} can install a hook and is floored by [${v.flooredGuards.join(', ') || 'nothing'}]`,
+      );
+    }
+    // The control: a source file whose path merely contains the word hooks.
+    const ok = write(path.join(WS, 'src', 'hooks', 'index.ts'));
+    assert.ok(
+      !ok.flooredGuards.includes('guard.agent-config'),
+      'an ordinary source file under src/hooks/ is being treated as agent configuration',
+    );
+  });
 
   test('every agent in the compatibility data names where its config lives', () => {
     // A record without one cannot be checked, which would make the guard below

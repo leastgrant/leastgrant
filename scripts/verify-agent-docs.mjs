@@ -99,6 +99,32 @@ for (const a of records) {
     );
   }
 
+  // Control paths are the other half of an integration. An adapter that ships
+  // without recording what decides its behaviour later has an off switch nobody
+  // has looked for — and three of those were found unfloored on the day this
+  // check was written, one of them the host's own standing-grant store.
+  const cps = a.controlPaths ?? [];
+  if (!cps.length) {
+    fail(
+      `${a.id}: records no controlPaths. Every agent has files that decide what it may do later — ` +
+        `its hook config, its permission grants, its MCP wiring, the memory a later session is ` +
+        `handed. test/control-files.test.ts floors whatever is listed, so an empty list means ` +
+        `nothing is floored on purpose.`,
+    );
+  }
+  for (const cp of cps) {
+    if (!cp.path || !cp.what || !cp.why) fail(`${a.id}: incomplete control path ${JSON.stringify(cp)}`);
+    else if (cp.what.length <= 25) fail(`${a.id}: "${cp.path}" does not say what it decides`);
+  }
+  // The install path is a control path by definition; a record that names one
+  // and not the other has two lists that can disagree.
+  for (const m of (a.configPath ?? '').matchAll(/(~|<repo>)([\\/][\w.\-/\\]+)/g)) {
+    const named = `${m[1]}${m[2].replace(/\\/g, '/')}`;
+    if (!cps.some((c) => c.path === named)) {
+      fail(`${a.id}: configPath names ${named}, which is absent from controlPaths`);
+    }
+  }
+
   // A grade is a summary of the runs; the runs are the fact. If the summary can
   // be reached without them the axis is decorative.
   const grade = deriveVerification(a);

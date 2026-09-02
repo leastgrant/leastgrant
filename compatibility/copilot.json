@@ -150,5 +150,22 @@
     }
   },
   "mechanism": "A Claude-format hook file at ~/.copilot/hooks/leastgrant.json. Copilot speaks Claude Code's wire format, so the same handler drives both.",
-  "install": "leastgrant install copilot"
+  "install": "leastgrant install copilot",
+  "controlPaths": [
+    {
+      "path": "~/.copilot/hooks/leastgrant.json",
+      "what": "the Claude-format hook file LeastGrant installs, and the whole ~/.copilot/hooks directory it sits in",
+      "why": "hook"
+    },
+    {
+      "path": ".github/copilot-instructions.md",
+      "what": "standing instructions every session is given",
+      "why": "instructions"
+    },
+    {
+      "path": ".github/instructions",
+      "what": "the same, per path pattern",
+      "why": "instructions"
+    }
+  ]
 }

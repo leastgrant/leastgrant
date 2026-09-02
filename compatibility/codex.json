@@ -162,5 +162,22 @@
     }
   },
   "mechanism": "Command handlers for `PreToolUse`, `PermissionRequest` and `PostToolUse` in ~/.codex/hooks.json. Codex binds trust to a hash of the handler definition, so upgrading re-flags it until re-trusted in /hooks.",
-  "install": "leastgrant install codex"
+  "install": "leastgrant install codex",
+  "controlPaths": [
+    {
+      "path": "~/.codex/hooks.json",
+      "what": "the handler definitions — this is the file our own installer writes",
+      "why": "hook"
+    },
+    {
+      "path": "~/.codex/config.toml",
+      "what": "features.hooks and allow_maximum_trust, either of which disables enforcement",
+      "why": "settings"
+    },
+    {
+      "path": "~/.codex/prompts",
+      "what": "prompts a later session executes",
+      "why": "instructions"
+    }
+  ]
 }

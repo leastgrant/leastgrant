@@ -167,6 +167,32 @@ describe('the pages and the records agree on the facts', () => {
     }
   });
 
+  test('every control path in the record is named on the page', () => {
+    // The paths that decide what an agent may do LATER are the ones a reader
+    // most needs and is least likely to guess: Antigravity has fourteen, and
+    // the one that matters most is the host's own standing-grant store, which
+    // is neither where LeastGrant installs itself nor anything the published
+    // docs point at. A page that lists the install path and stops is telling
+    // somebody they have seen the surface when they have seen one file of it.
+    for (const a of records) {
+      const html = pageFor(a.id);
+      const cps = a.controlPaths ?? [];
+      assert.ok(cps.length, `${a.id}: the record has no controlPaths to show`);
+      for (const cp of cps) {
+        assert.ok(
+          html.includes(escapeHtml(cp.path)),
+          `${a.id}: the page does not name the control path ${cp.path}`,
+        );
+        const fragment = cp.what.split(/[—.]/)[0].trim().slice(0, 40);
+        if (fragment.length < 12) continue;
+        assert.ok(
+          html.includes(escapeHtml(fragment)),
+          `${a.id}: the page names ${cp.path} without saying what it decides ("${fragment}…")`,
+        );
+      }
+    }
+  });
+
   test('a tool class the record says is not covered is not shown as gated', () => {
     for (const a of records) {
       const html = pageFor(a.id);

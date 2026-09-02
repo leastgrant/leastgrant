@@ -173,5 +173,47 @@
     }
   },
   "mechanism": "A `PreToolUse` and `PostToolUse` command hook in settings.json. The payload arrives on stdin; the verdict goes to stdout as `hookSpecificOutput`.",
-  "install": "leastgrant install"
+  "install": "leastgrant install",
+  "controlPaths": [
+    {
+      "path": "~/.claude/settings.json",
+      "what": "the hook that makes LeastGrant run at all, plus permissions.allow",
+      "why": "hook"
+    },
+    {
+      "path": "~/.claude/settings.local.json",
+      "what": "the same settings, per-machine, and they win",
+      "why": "hook"
+    },
+    {
+      "path": "<repo>/.claude/settings.json",
+      "what": "project-scoped hooks and allow rules",
+      "why": "hook"
+    },
+    {
+      "path": "~/.claude/commands",
+      "what": "slash commands a later session runs as if you had typed them",
+      "why": "instructions"
+    },
+    {
+      "path": "~/.claude/agents",
+      "what": "subagent definitions, including their system prompts",
+      "why": "instructions"
+    },
+    {
+      "path": "~/.claude/skills",
+      "what": "skills a later session loads and follows",
+      "why": "instructions"
+    },
+    {
+      "path": "<repo>/.mcp.json",
+      "what": "which MCP servers this project wires the agent to",
+      "why": "mcp"
+    },
+    {
+      "path": "managed-settings.json",
+      "what": "the managed policy that can switch every hook off, including ours",
+      "why": "settings"
+    }
+  ]
 }

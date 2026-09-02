@@ -108,7 +108,15 @@ const CONTROL_FILES = [
   '.claude/commands',
   '.claude/agents',
   '.claude/skills',
-  '.claude/settings.local.json',
+  // Antigravity's equivalents, found by looking at what the installed 2.11.0
+  // runtime actually keeps rather than by analogy: `builtin/skills` is the same
+  // thing as `.claude/skills`, and `brain` and `implicit` are the persisted
+  // memory a later session is handed as context. All three are instructions a
+  // future run follows without anybody re-reading them.
+  '.gemini/antigravity/builtin',
+  '.gemini/antigravity/brain',
+  '.gemini/antigravity/implicit',
+  '.gemini/antigravity/knowledge',
   // package.json carries the scripts that `npm test` and friends run, so an
   // edit here is an edit to what a later approved command will execute.
   'package.json',
@@ -160,11 +168,49 @@ const CONTROL_FILES = [
   // unfloored.
   '.codex/hooks.json',
   '.gemini/config/hooks.json',
-  '.agents/hooks.json',
-  // Antigravity's whole workspace surface, not just today's filename: `.agents`
-  // is where the repo-local hook config lives, and a directory whose purpose is
-  // agent configuration is not somewhere an unattended write should land.
+  // Any file called `hooks.json`, wherever it sits.
+  //
+  // Named rather than enumerated by directory, because enumerating is what
+  // kept failing. Antigravity 2.11.0 loads hooks from FOUR workspace roots —
+  // `.agents`, `_agents`, `.agent`, `_agent` — and from `plugins/<name>/`
+  // besides; `.agents/hooks.json` was floored and the other four were ordinary
+  // project files. A write to any of them installs a handler that runs on every
+  // subsequent tool call, and one returning `auto_approve` switches enforcement
+  // off while LeastGrant still reports itself installed.
+  //
+  // The false positive is a project that keeps unrelated git-hook config under
+  // this name and eats one prompt for it. The false negative is the next vendor
+  // to pick a fifth directory.
+  'hooks.json',
+  // The customization roots themselves, so `mcp_config.json`, plugin
+  // definitions and anything else the runtime learns to read there are covered
+  // without waiting for the next drift report.
   '.agents',
+  '_agents',
+  '.agent',
+  '_agent',
+  // Antigravity's whole config directory, because that is what the runtime
+  // itself calls it: `language_server.exe --config_dir="config"`, resolved
+  // relative to the Gemini dir. Naming the individual files was the mistake
+  // that left the first three above uncovered, and this directory holds worse
+  // than a hook path.
+  //
+  // `config.json` in here carries `userSettings.globalPermissionGrants.allow`
+  // — the host's OWN "Always allow" list, entries like
+  // `mcp(playwright/browser_evaluate)` and `read_url(raw.githubusercontent.com)`.
+  // An agent that appends one line to it grants itself standing approval from
+  // the host, which is strictly worse than disabling LeastGrant: it is invisible
+  // in LeastGrant's own state and it survives uninstalling us. It was reaching
+  // only `guard.write-outside` plus a lucky filename match on the credentials
+  // heuristic, and neither is a floor on the thing that matters.
+  //
+  // `mcp_config.json` decides which MCP servers the agent is wired to, which is
+  // already why `.mcp.json` is floored; this is the same file under another
+  // vendor's name.
+  '.gemini/config',
+  // The project registry, which maps a folder to the project whose settings and
+  // resources the runtime will apply to it.
+  '.gemini/projects.json',
   // OpenCode's, which no adapter reads yet. Guarding it is not an integration
   // claim — a poisoned permission config is worth a prompt whether or not
   // LeastGrant is the thing being disabled.
