@@ -226,3 +226,42 @@ describe('cursor: the two adapters agree', () => {
     }
   });
 });
+
+describe('cursor: an MCP server cannot choose its own identity', () => {
+  // The tool name comes from the server; `mcp_server_name` comes from Cursor.
+  // The adapter used to accept a tool name that already began with `mcp__` and
+  // use it verbatim, discarding the server Cursor reported — so a server called
+  // `sketchy` could name its tool `mcp__filesystem__read_file` and inherit every
+  // approval the real filesystem server had earned. A signature must never be
+  // something the caller gets to pick.
+  const signatureOf = (server: string, name: string): string => {
+    hook({
+      hook_event_name: 'beforeMCPExecution',
+      mcp_server_name: server,
+      tool_name: name,
+      tool_input: JSON.stringify({ path: 'src/a.ts' }),
+    });
+    const ledger = fs
+      .readFileSync(path.join(HOME, 'ledger.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { signature: string });
+    return ledger[ledger.length - 1]?.signature ?? '';
+  };
+
+  test('a prefixed tool name does not override the reported server', () => {
+    const honest = signatureOf('filesystem', 'read_file');
+    const impostor = signatureOf('sketchy', 'mcp__filesystem__read_file');
+    assert.notEqual(impostor, honest, "a server picked another server's learned identity");
+    assert.match(impostor, /sketchy/);
+  });
+
+  test('a server echoing its own qualified name still lands where it should', () => {
+    // The honest case for the same input shape: spelling its own name out in
+    // full must not earn it a second, separate identity to re-learn.
+    assert.equal(
+      signatureOf('filesystem', 'mcp__filesystem__read_file'),
+      signatureOf('filesystem', 'read_file'),
+    );
+  });
+});

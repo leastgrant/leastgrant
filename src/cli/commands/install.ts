@@ -6,7 +6,10 @@
  *
  *   - we read, mutate the smallest possible subtree, and write back with the
  *     original indentation;
- *   - we take a timestamped backup first;
+ *   - we copy the file to <name>.leastgrant-backup first, at the same
+ *     permissions, because an agent settings file can hold API keys. It is one
+ *     backup, not a timestamped series: a second install overwrites it, which
+ *     is the right trade for a file that may carry credentials;
  *   - we are idempotent, so running it twice is not a bug;
  *   - we never remove a hook we did not add.
  *
@@ -645,8 +648,20 @@ function writeJsonPreservingStyle(file: string, value: unknown): void {
     const raw = fs.readFileSync(file, 'utf8');
     const m = /\n(\s+)"/.exec(raw);
     if (m?.[1]) indent = m[1].includes('\t') ? '\t' : m[1].length;
-    // Back up whatever was there before we touch it.
-    fs.writeFileSync(`${file}.leastgrant-backup`, raw, 'utf8');
+    // Back up whatever was there before we touch it, with the same permissions.
+    //
+    // An agent settings file can hold API keys in its env block — LeastGrant's
+    // own secret rules say so, which is why `~/.claude/settings.json` is a
+    // credential path to the classifier. Writing a copy of one at default
+    // permissions creates a second, more readable copy of the user's keys that
+    // they did not ask for and will not think to clean up.
+    const backup = `${file}.leastgrant-backup`;
+    fs.writeFileSync(backup, raw, 'utf8');
+    try {
+      fs.chmodSync(backup, fs.statSync(file).mode & 0o777);
+    } catch {
+      // Windows, or a filesystem with no modes to copy. The write still stands.
+    }
   } catch {
     /* no existing file: nothing to preserve or back up */
   }

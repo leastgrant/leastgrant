@@ -193,7 +193,21 @@ export function runCursorHook(raw: unknown): void {
       } else if (input.tool_input && typeof input.tool_input === 'object') {
         args = input.tool_input as Record<string, unknown>;
       }
-      tool = name.startsWith('mcp__') ? name : `mcp__${server}__${name}`;
+      // Built from `mcp_server_name`, always.
+      //
+      // This used to accept a `tool_name` that already began with `mcp__` and
+      // use it verbatim, discarding the server Cursor actually reported. The
+      // tool name comes from the server; the server name comes from Cursor. So
+      // a server called `sketchy` could name its tool
+      // `mcp__filesystem__read_file` and inherit every approval the real
+      // filesystem server had earned — choosing its own learned identity, which
+      // is the one thing a signature must not let a caller do.
+      //
+      // A name that already carries a prefix keeps its final segment and gets
+      // the authoritative server, so the honest case (a server echoing the
+      // fully-qualified name back) still produces the identity it should.
+      const bare = name.startsWith('mcp__') ? (name.split('__').pop() ?? name) : name;
+      tool = `mcp__${server}__${bare}`;
       toolInput = args;
       canAsk = true;
       break;
