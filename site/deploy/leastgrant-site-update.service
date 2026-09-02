@@ -1,0 +1,56 @@
+# Rebuild leastgrant.xyz from main, if main has moved.
+#
+# Oneshot, driven by leastgrant-site-update.timer. Does nothing on almost every
+# run — see update.sh.
+#
+# This unit is deliberately less locked down than leastgrant-web.service,
+# because unlike that one it genuinely needs to do things: fetch over the
+# network, install dependencies, write to the release directory. It still runs
+# unprivileged and still cannot touch anything outside /srv/leastgrant.
+
+[Unit]
+Description=Rebuild leastgrant.xyz from main
+Documentation=https://github.com/leastgrant/leastgrant/blob/main/site/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=leastgrant-deploy
+Group=leastgrant-deploy
+
+ExecStart=/srv/leastgrant/update.sh
+
+# A build that hangs must not hold the timer open forever.
+TimeoutStartSec=15min
+
+# --- hardening ----------------------------------------------------------------
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# The one place it may write.
+ReadWritePaths=/srv/leastgrant
+
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @obsolete @swap @reboot
+SystemCallArchitectures=native
+
+# npm and tsc are not small, but they are not a build farm either.
+MemoryMax=2G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

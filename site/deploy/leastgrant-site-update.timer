@@ -1,0 +1,27 @@
+# When to check whether main has moved.
+#
+# Every ten minutes. The check is a `git fetch` and a string comparison, so the
+# common case costs almost nothing; the expensive path only runs when there is
+# something new to build.
+#
+# `Persistent=yes` so a machine that was off catches up once on boot rather than
+# waiting for the next slot — otherwise a reboot at the wrong moment leaves the
+# site a version behind until somebody notices.
+
+[Unit]
+Description=Check whether leastgrant.xyz needs rebuilding
+Documentation=https://github.com/leastgrant/leastgrant/blob/main/site/DEPLOY.md
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=yes
+
+# A little jitter, so this is not one more thing hitting GitHub exactly on the
+# minute along with everybody else's cron.
+RandomizedDelaySec=90
+
+Unit=leastgrant-site-update.service
+
+[Install]
+WantedBy=timers.target
