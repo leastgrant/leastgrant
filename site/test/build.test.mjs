@@ -595,3 +595,87 @@ describe('the docs layout reserves a sidebar only when there is one', () => {
     assert.match(wide[0], /\.doc--toc/, 'the sidebar layout still applies to every .doc');
   });
 });
+
+// --- the compatibility page -------------------------------------------------
+
+describe('the compatibility page tells the truth about what does not work', () => {
+  const html = () => pages.find((p) => p.file === 'compatibility/index.html')?.html ?? '';
+  const data = () =>
+    fs
+      .readdirSync(path.join(SITE, '..', 'compatibility'))
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => JSON.parse(fs.readFileSync(path.join(SITE, '..', 'compatibility', f), 'utf8')));
+
+  test('the page exists and lists every agent in the data', () => {
+    const page = html();
+    assert.ok(page, 'no compatibility page was built');
+    for (const agent of data()) {
+      assert.ok(page.includes(agent.name), `${agent.name} is missing from the page`);
+    }
+  });
+
+  test('every limitation in the data reaches the page', () => {
+    // The failure this guards against is the tempting one: a page that renders
+    // the matrix, which looks mostly fine, and quietly drops the prose saying
+    // why it is not. The limitations are the content here.
+    //
+    // Compared as plain text against a de-entitied page rather than by regex.
+    // The first version escaped each limitation into a pattern, which is a lot
+    // of backslashes standing between the test and what it means, and it broke
+    // on the apostrophe in "Cursor's" before it ever ran.
+    const plain = html()
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+    for (const agent of data()) {
+      for (const limit of [...agent.upstreamLimitations, ...agent.leastgrantLimitations]) {
+        assert.ok(
+          plain.includes(limit),
+          `${agent.id}: this limitation never reaches the page — ${limit.slice(0, 70)}`,
+        );
+      }
+    }
+  });
+
+  test('an unknown is printed as unknown, never as a blank', () => {
+    // A blank cell reads as "fine", which is the opposite of what unknown means.
+    const page = html();
+    const anyUnknown = data().some((a) =>
+      [...Object.values(a.verdicts), ...Object.values(a.interception)].some(
+        (f) => f && typeof f === 'object' && f.value === 'unknown',
+      ),
+    );
+    if (anyUnknown) assert.match(page, /unknown/, 'the data has unknowns and the page never says so');
+  });
+
+  test('no agent is described as verified without a platform it was verified on', () => {
+    const page = html();
+    for (const agent of data()) {
+      if (agent.osTested.length) continue;
+      // Anchor on the agent's own section, not on the first place its name
+      // appears — that is the summary table, whose next 1200 characters are
+      // cells rather than the sentence being checked.
+      const idx = page.indexOf(`id="${agent.id}"`);
+      assert.ok(idx >= 0, `no section for ${agent.id}`);
+      const section = page.slice(idx, idx + 1200);
+      assert.ok(
+        /Nobody has run LeastGrant inside it|never run inside/.test(section),
+        `${agent.id} has no tested platform but the page does not say so`,
+      );
+    }
+  });
+
+  test('the page and the CLI agree, because both call assess()', () => {
+    // Not a rendering test: a guard against someone re-deriving the grade in
+    // the template. If this file ever computes a level itself, the CLI and the
+    // site can disagree about the same agent, which is the whole failure the
+    // data directory was created to prevent.
+    const src = fs.readFileSync(path.join(SITE, 'pages', 'compatibility.mjs'), 'utf8');
+    assert.ok(
+      !/function\s+assess|const\s+assess\s*=/.test(src),
+      'the compatibility page defines its own assess() instead of using the one in core',
+    );
+  });
+});

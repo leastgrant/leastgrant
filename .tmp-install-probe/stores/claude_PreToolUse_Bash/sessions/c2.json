@@ -1,1 +1,0 @@
-{"sessionId":"c2","taints":[],"count":1,"startedAt":1788341090285,"lastCapability":"exec.unknown","pendingById":{"tu2":{"signature":"sh","capability":"exec.unknown","blast":{"reach":"machine","reversibility":"irreversible","exposure":"none","scale":"single"},"decision":"ask","display":"sh","toolUseId":"tu2","at":1788341090285,"attended":false,"project":"d:\\leastgrant"}}}

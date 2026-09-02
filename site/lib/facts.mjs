@@ -48,17 +48,25 @@ export function gather() {
 
   // --- the bypass corpus ---------------------------------------------------
   //
-  // Two lists in one file: the named evasions, and the symlink traversals that
-  // were added when that class was closed. Counted separately because they are
-  // built differently, then summed for the figure the page shows.
+  // The named evasions now live in corpus/bypasses.json, which is the file the
+  // test iterates and the file this page publishes, so the count is read rather
+  // than scraped. It used to be scraped out of the test source with a regex,
+  // and moving the cases to JSON broke that parser on the same commit — which
+  // is exactly the drift the corpus was extracted to prevent, caught by the
+  // check below one layer further out than intended.
+  //
+  // The symlink traversals are still counted from their test, because they are
+  // built as a table inside it rather than as corpus entries. Summed for the
+  // figure the page shows.
 
-  const named = (bypass.match(/^\s*\{ name: '/gm) || []).length;
+  const corpus = JSON.parse(read('corpus/bypasses.json'));
+  const named = Array.isArray(corpus.cases) ? corpus.cases.length : 0;
   const symlinkBlock = bypass.slice(bypass.indexOf("describe('symlink traversal"));
   const symlink = (symlinkBlock.match(/^\s*\['[^']+', '/gm) || []).length;
   if (named < 20 || symlink < 3) {
     throw new Error(
-      `the bypass corpus parser found ${named} named cases and ${symlink} symlink cases, ` +
-        `which does not look like test/bypass.test.ts any more`,
+      `the bypass corpus parser found ${named} cases in corpus/bypasses.json and ${symlink} ` +
+        `symlink cases in test/bypass.test.ts, which does not look right any more`,
     );
   }
 

@@ -30,6 +30,8 @@ import { home } from './pages/home.mjs';
 import { security } from './pages/security.mjs';
 import { DOCS, docPage, docsIndex, cliPage, agentsPage } from './pages/docs.mjs';
 import { notFound } from './pages/not-found.mjs';
+import { compatibility } from './pages/compatibility.mjs';
+import { loadCompatibility, assess } from '../dist/src/core/compatibility.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, 'dist');
@@ -132,6 +134,7 @@ export async function build({ quiet = false } = {}) {
   log('rendering pages');
   emit('index.html', home(facts, verdicts), '/');
   emit('security/index.html', security(facts), '/security/');
+  emit('compatibility/index.html', compatibility(facts, loadCompatibility().map(assess)), '/compatibility/');
   emit('docs/index.html', docsIndex(facts), '/docs/');
   emit('docs/cli/index.html', cliPage(facts, help), '/docs/cli/');
   emit('docs/agents/index.html', agentsPage(facts), '/docs/agents/');

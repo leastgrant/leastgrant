@@ -1675,3 +1675,113 @@ footer a:hover {
     color: #000;
   }
 }
+
+/* --- the compatibility matrix ---------------------------------------------
+ *
+ * A support table is structurally bad at bad news: a gap becomes an empty cell
+ * and an empty cell reads as "fine". So every cell carries a word, and the
+ * words that mean "this does not work" are given the same visual weight as the
+ * ones that mean it does — no muted grey for the inconvenient half.
+ *
+ * Colour is never the only signal. `not seen` and `gated` differ in text
+ * before they differ in hue, which matters on a page whose whole purpose is to
+ * be read accurately.
+ */
+
+.matrix th[scope='row'] {
+  white-space: normal;
+  background: transparent;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.matrix th[scope='row'] .ver {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--dim);
+  letter-spacing: 0;
+}
+
+.matrix caption {
+  caption-side: bottom;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  font-size: 0.82rem;
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+}
+
+.cap {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  padding: 0.1rem 0.42rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.cap[data-tone='ok'] {
+  color: var(--allow);
+  border-color: color-mix(in srgb, var(--allow) 35%, transparent);
+}
+
+.cap[data-tone='warn'] {
+  color: var(--ask);
+  border-color: color-mix(in srgb, var(--ask) 35%, transparent);
+}
+
+.cap[data-tone='bad'] {
+  color: var(--deny);
+  border-color: color-mix(in srgb, var(--deny) 40%, transparent);
+}
+
+.cap[data-tone='unknown'] {
+  color: var(--dim);
+  border-color: var(--line);
+  border-style: dashed;
+}
+
+.cap[data-tone='none'] {
+  color: var(--edge);
+  border-color: transparent;
+}
+
+/* The per-agent findings list. A marker in the gutter rather than a bullet, so
+ * the shape of the list tells you how much is wrong before you read a word. */
+
+ul.findings {
+  list-style: none;
+  padding-left: 0;
+  margin: 1.2em 0;
+}
+
+ul.findings li {
+  position: relative;
+  padding-left: 1.4rem;
+  margin: 0.5em 0;
+}
+
+ul.findings li::before {
+  position: absolute;
+  left: 0;
+  font-family: var(--mono);
+}
+
+ul.findings li[data-tone='ok']::before {
+  content: '\2713';
+  color: var(--allow);
+}
+
+ul.findings li[data-tone='warn']::before {
+  content: '!';
+  color: var(--ask);
+}
+
+ul.findings li[data-tone='bad']::before {
+  content: '\2717';
+  color: var(--deny);
+}

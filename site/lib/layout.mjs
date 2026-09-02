@@ -132,6 +132,7 @@ function footer() {
           <li><a href="/docs/threat-model/">Threat model</a></li>
           <li><a href="/security/">Security</a></li>
           <li><a href="/docs/privacy/">Privacy</a></li>
+          <li><a href="/compatibility/">Compatibility</a></li>
           <li><a href="/docs/agents/">Agent support</a></li>
         </ul>
       </div>
