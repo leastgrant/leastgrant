@@ -138,6 +138,39 @@ const CONTROL_FILES = [
   '.github/hooks',
   '.leastgrant/config.json',
   'managed-settings.json',
+  // The file each agent reads to decide whether LeastGrant runs at all.
+  //
+  // Three of these were missing, found by probing every `configPath` in
+  // `compatibility/*.json` through the real binary rather than by reading this
+  // list. The list looked complete — `.codex/config.toml` and
+  // `.gemini/settings.json` are both here — and the actual hook configuration
+  // for those two agents lives somewhere else entirely.
+  //
+  // They were not silently allowed. `~/.codex/hooks.json` and
+  // `~/.gemini/config/hooks.json` asked because they are outside the project,
+  // and `<repo>/.agents/hooks.json` asked because it was unfamiliar. Neither is
+  // a floor. Outside-home writes share the `<path:outside:home>` signature, so
+  // approving one approves the class; unfamiliarity is what the promotion
+  // machinery exists to retire. Both roads end at a silent allow on the file
+  // that switches the enforcement off, which is the one edit that must always
+  // reach a person.
+  //
+  // `test/control-files.test.ts` derives this requirement from the
+  // compatibility records, so the next adapter cannot ship its config path
+  // unfloored.
+  '.codex/hooks.json',
+  '.gemini/config/hooks.json',
+  '.agents/hooks.json',
+  // Antigravity's whole workspace surface, not just today's filename: `.agents`
+  // is where the repo-local hook config lives, and a directory whose purpose is
+  // agent configuration is not somewhere an unattended write should land.
+  '.agents',
+  // OpenCode's, which no adapter reads yet. Guarding it is not an integration
+  // claim — a poisoned permission config is worth a prompt whether or not
+  // LeastGrant is the thing being disabled.
+  '.config/opencode',
+  'opencode.json',
+  'opencode.jsonc',
 ];
 
 /**
