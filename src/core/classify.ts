@@ -25,8 +25,11 @@ import {
   candidatesOf,
   canonicalRoots,
   inWorkspace as pathInWorkspace,
+  isUnplaceable,
   looksLikePath,
   displayPath,
+  namedPath,
+  unplaceable,
   type CanonicalPath,
 } from './paths.js';
 import { classifySecretPath, credentialTreeRoot, redact, secretSubstrings } from './secrets.js';
@@ -165,6 +168,20 @@ const INJECTS_EXECUTION = new Set(['shell-eval', 'env', 'git-config', 'privilege
  * ordinary `src/../src/a.ts` has one candidate and is unaffected.
  */
 function riskiest(c: CanonicalPath, roots: string[], secretPatterns: string[]): string {
+  const best = pick(c, roots, secretPatterns);
+  // `c.unknown` means at least one reading of this input could not be computed,
+  // and there is no honest way to call something contained when we do not know
+  // where it is. This is the single funnel every consumer goes through, which
+  // is why the rule lives here rather than in the dozen knowledge modules —
+  // exactly the argument the comment above makes for collapsing to one string.
+  //
+  // The best reading is carried along inside the marker rather than dropped.
+  // "I do not know where this is" and "there is no path here" used to be the
+  // same value, and every consumer read that value as the second one.
+  return c.unknown ? unplaceable(best || c.named || c.raw) : best;
+}
+
+function pick(c: CanonicalPath, roots: string[], secretPatterns: string[]): string {
   const cands = candidatesOf(c);
   if (cands.length < 2) return cands[0] ?? '';
   const secret = cands.find((a) => classifySecretPath(a, secretPatterns).secret);
@@ -192,8 +209,57 @@ export function analyze(req: Request, ctx: AnalyzeCtx): Analysis {
     }
   }
   const secrets = secretSubstrings(raw);
-  out.actions = out.actions.map((a) => scrub(a, secrets));
+  out.actions = out.actions.map((a) => scrub(settleTargets(a), secrets));
+  out.understood = out.understood && out.actions.every((a) => a.understood);
   return out;
+}
+
+/** The note an action carries when one of its paths could not be placed. */
+const UNPLACED_NOTE = 'LeastGrant could not work out which file this names';
+
+/**
+ * The last word on a path that could not be placed.
+ *
+ * Everything upstream carries one as a marked string, so that a knowledge
+ * module which only ever sees `resolve()`'s return value cannot mistake it for
+ * an ordinary location. That representation has to stop here, because the
+ * floors in `guards.ts` match on the *name* — `isInside(t.value, stateDir)`,
+ * `isControlFile(t.value)`, `isPersistence(t.value)` — and a marked string
+ * matches none of them.
+ *
+ * Two things happen, and both are load-bearing:
+ *
+ *  1. **The target keeps the name and loses the location.** `value` is the best
+ *     reading, so the name-matching floors have something to match;
+ *     `inWorkspace` is false, because we do not know. Emitting no target at all
+ *     — which is what an empty `abs` used to produce — turned every one of
+ *     those floors off simultaneously, and that is how
+ *     `C:\pagefile.sys\..\..\<stateDir>\config.json` got past the one DENY in
+ *     the system and set the posture to `observe`.
+ *  2. **The action stops being understood.** That is simply true, and it is
+ *     what makes the identity unpromotable: `guard.not-understood` is an ask
+ *     floor, and step 4 of `decideOne` returns before any amount of learned
+ *     evidence is consulted. Without it, every unplaceable path shared one
+ *     signature, so approvals of a harmless one paid for a credential read
+ *     spelled the same way.
+ *
+ * Autopilot does waive `guard.not-understood`, but only for an action that is
+ * `containedInProject`, and an unplaceable target is never in the project — so
+ * the waiver cannot reach this.
+ */
+function settleTargets(a: Action): Action {
+  if (!a.targets.some((t) => t.type === 'path' && isUnplaceable(t.value))) return a;
+  const targets: Target[] = a.targets.map((t) =>
+    t.type === 'path' && isUnplaceable(t.value)
+      ? { ...t, value: namedPath(t.value), inWorkspace: false }
+      : t,
+  );
+  return {
+    ...a,
+    targets,
+    understood: false,
+    notes: a.notes.includes(UNPLACED_NOTE) ? a.notes : [...a.notes, UNPLACED_NOTE],
+  };
 }
 
 function analyzeRaw(req: Request, ctx: AnalyzeCtx): Analysis {
@@ -204,13 +270,13 @@ function analyzeRaw(req: Request, ctx: AnalyzeCtx): Analysis {
   ctx = { ...ctx, roots };
   const root = roots[0] ?? req.cwd;
 
-  const resolve = (arg: string): string => riskiest(canonicalize(arg, req.cwd), roots, ctx.secretPatterns);
-  const inWs = (abs: string): boolean => pathInWorkspace(abs, roots);
-  const isSecret = (abs: string): boolean => classifySecretPath(abs, ctx.secretPatterns).secret;
-  const isTree = (abs: string): boolean => !inWs(abs) && credentialTreeRoot(abs).secret;
-
-  const kctx: KnowledgeCtx = { cwd: req.cwd, roots: ctx.roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree: isTree };
-  const sctx: SignatureCtx = { resolve, inWorkspace: inWs, isSecret, looksLikePath };
+  // The same resolution rules the shell path uses. They used to be spelled out
+  // twice, and the copy here was the one missing the unplaceable fallback — so
+  // `Read`, `Write`, `Edit` and `Grep` received a bare empty string for a path
+  // they could not place, and `analyzeStructured` turned that into an action
+  // with no targets at all. One definition, so there is nowhere for the two to
+  // drift apart again.
+  const { kctx, sctx } = contextFor(req.cwd, roots, ctx.secretPatterns);
 
   const kind = normalizeTool(req.tool);
 
@@ -330,10 +396,14 @@ function analyzeShell(
       continue;
     }
     const c = canonicalize(arg, shellCwd);
-    // An ambiguous `cd` — one that crossed a symlink with a `..` — has two
-    // possible destinations, and every relative path after it would be
-    // resolved against a guess. Losing track is the honest outcome.
-    if (c.alt && c.alt !== c.abs) cwdKnown = false;
+    // An ambiguous `cd` — one that crossed a symlink with a `..`, or one whose
+    // walk we were refused — has more than one possible destination, and every
+    // relative path after it would be resolved against a guess. Losing track is
+    // the honest outcome. `c.unknown` has to be tested as well as `c.alt`,
+    // because a refused walk now keeps its lexical reading in `abs`: taking
+    // that as the new working directory would place every later path in the
+    // command against a directory we were not able to confirm.
+    if (c.unknown || (c.alt && c.alt !== c.abs)) cwdKnown = false;
     else if (c.abs) shellCwd = c.abs;
     else cwdKnown = false;
   }
@@ -363,11 +433,7 @@ function analyzeShell(
 }
 
 /**
- * A resolution context rooted at a specific working directory.
- * Built per command, because `cd` moves it.
- */
-/**
- * The path a resolution failure resolves to.
+ * What a resolution failure resolves to.
  *
  * Returning an empty string was the single most dangerous default in the
  * engine. Knowledge modules are written as
@@ -377,61 +443,77 @@ function analyzeShell(
  * therefore came out as `fs.read.workspace`: the most permissive answer
  * available, produced by the absence of information.
  *
- * So an unplaceable path resolves to somewhere definitely outside the project
+ * So an unplaceable path resolves to the `UNPLACEABLE` marker in `paths.ts`
  * instead. It is not a real location and never touches the filesystem; it
- * exists so that "I do not know where this is" reads as "not in your project",
- * which is the honest answer and the safe one.
+ * carries the best reading of the name, and it exists so that "I do not know
+ * where this is" reads as "not in your project", which is the honest answer and
+ * the safe one.
+ *
+ * The marker lives in `paths.ts` rather than here because the floors need it
+ * too: a target has to keep its *name* for `guard.self-write`,
+ * `guard.agent-config` and `guard.persistence` to have anything to match, and
+ * dropping the target instead is what silenced all three at once.
  */
-const UNPLACEABLE = '\u0000unplaceable';
-
-function isUnplaceable(abs: string): boolean {
-  return abs.startsWith(UNPLACEABLE);
-}
-
 function contextFor(
   cwd: string,
   roots: string[],
   secretPatterns: string[],
 ): { kctx: KnowledgeCtx; sctx: SignatureCtx } {
-  const resolve = (arg: string): string =>
-    riskiest(canonicalize(arg, cwd), roots, secretPatterns) || `${UNPLACEABLE}/${arg}`;
-  const inWs = (abs: string): boolean => (isUnplaceable(abs) ? false : pathInWorkspace(abs, roots));
-  const isSecret = (abs: string): boolean =>
-    isUnplaceable(abs) ? false : classifySecretPath(abs, secretPatterns).secret;
-  const isCredentialTree = (abs: string): boolean =>
-    !isUnplaceable(abs) && !inWs(abs) && credentialTreeRoot(abs).secret;
-  return {
-    kctx: { cwd, roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree },
-    sctx: { resolve, inWorkspace: inWs, isSecret, looksLikePath },
-  };
+  return resolutionContext(cwd, roots, secretPatterns, (arg) =>
+    riskiest(canonicalize(arg, cwd), roots, secretPatterns),
+  );
 }
 
 /**
  * The context used once we have lost track of the working directory.
  *
- * A relative path can no longer be placed, so it resolves to nothing — and
- * `inWorkspace('')` is false, which is the safe answer: an unplaceable path is
- * treated as outside the project and asks. Absolute paths still resolve
- * normally, since they do not depend on where we are.
+ * A relative path can no longer be placed, so it comes back unplaceable — which
+ * reads as outside the project, is still name-matched for credentials, and is
+ * never learnable. Absolute paths still resolve normally, since they do not
+ * depend on where we are.
  */
 function unknownCwdContext(
   roots: string[],
   secretPatterns: string[],
 ): { kctx: KnowledgeCtx; sctx: SignatureCtx } {
-  const resolve = (arg: string): string => {
+  return resolutionContext('', roots, secretPatterns, (arg) => {
     // An absolute path does not depend on where we are, so it still resolves.
     // A relative one cannot be placed at all, and must not read as contained.
     const looksAbsolute = /^([A-Za-z]:[\\/]|[\\/]|~)/.test(arg);
-    const abs = looksAbsolute ? riskiest(canonicalize(arg, roots[0] ?? ''), roots, secretPatterns) : '';
-    return abs || `${UNPLACEABLE}/${arg}`;
-  };
+    return looksAbsolute ? riskiest(canonicalize(arg, roots[0] ?? ''), roots, secretPatterns) : '';
+  });
+}
+
+/**
+ * A resolution context rooted at a specific working directory.
+ * Built per command, because `cd` moves it.
+ *
+ * The three rules for a path we could not place, in the order they matter:
+ *
+ *  - **Location: unknown, therefore outside.** `inWorkspace` is false. This is
+ *    the one thing the first version of this already had right.
+ *  - **Name: still a name.** `classifySecretPath` is a test on the *shape* of a
+ *    path — `.ssh/id_rsa` names a private key wherever it turns out to live —
+ *    so it is applied to the reading we have rather than skipped. Skipping it
+ *    is what let a credential read spelled through an unreadable component
+ *    inherit the signature, the approvals and the empty floor set of an
+ *    ordinary read of `~/Documents/notes.txt`.
+ *  - **Understood: no.** `settleTargets` marks any action holding one of these
+ *    as not understood, which is honest and is what makes the identity
+ *    unpromotable however often it is approved.
+ */
+function resolutionContext(
+  cwd: string,
+  roots: string[],
+  secretPatterns: string[],
+  place: (arg: string) => string,
+): { kctx: KnowledgeCtx; sctx: SignatureCtx } {
+  const resolve = (arg: string): string => place(arg) || unplaceable(arg);
   const inWs = (abs: string): boolean => (isUnplaceable(abs) ? false : pathInWorkspace(abs, roots));
-  const isSecret = (abs: string): boolean =>
-    isUnplaceable(abs) ? false : classifySecretPath(abs, secretPatterns).secret;
-  const isCredentialTree = (abs: string): boolean =>
-    !isUnplaceable(abs) && !inWs(abs) && credentialTreeRoot(abs).secret;
+  const isSecret = (abs: string): boolean => classifySecretPath(namedPath(abs), secretPatterns).secret;
+  const isCredentialTree = (abs: string): boolean => !inWs(abs) && credentialTreeRoot(namedPath(abs)).secret;
   return {
-    kctx: { cwd: '', roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree },
+    kctx: { cwd, roots, resolve, inWorkspace: inWs, isSecret, isCredentialTree },
     sctx: { resolve, inWorkspace: inWs, isSecret, looksLikePath },
   };
 }
@@ -860,6 +942,13 @@ function analyzeStructured(
   const filePath = firstString(input, ['file_path', 'path', 'filePath', 'target_file', 'filename', 'notebook_path']);
 
   if (kind === 'read' || kind === 'edit' || kind === 'write') {
+    // `kctx.resolve` never returns an empty string for a non-empty argument —
+    // an unplaceable path comes back marked, not missing. That is what makes
+    // the `abs ? ... : ...` guards below mean "was a path named at all", which
+    // is the question they read like. When resolve *could* return '' this same
+    // code meant "did we manage to place it", so `Read
+    // C:\pagefile.sys\..\..\~\.aws\credentials` produced an action with no
+    // target, no exposure and therefore no floor.
     const abs = filePath ? kctx.resolve(filePath) : '';
     const secret = abs ? kctx.isSecret(abs) : false;
     const inside = abs ? kctx.inWorkspace(abs) : false;

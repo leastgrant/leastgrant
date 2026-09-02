@@ -20,7 +20,7 @@ import { analyze, normalizeTool } from '../src/core/classify.js';
 import { decide } from '../src/core/decide.js';
 import { newEnvelope, newSession, observe, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
 import { DEFAULT_CONFIG } from '../src/store/index.js';
-import { canonicalize } from '../src/core/paths.js';
+import { canonicalize, candidatesOf, isInside } from '../src/core/paths.js';
 
 const WS = path.join(os.tmpdir(), 'lg-audit-ws');
 const AT = 1788000000000;
@@ -251,14 +251,59 @@ describe('an unrecognised tool is not a harmless one', () => {
 // macOS runner while passing on the machine it was written on.
 describe('Windows device namespaces do not degrade to a relative path', { skip: !WIN_PLATFORM }, () => {
   // Stripping `\\?\` left `GLOBALROOT\Device\...`, which then resolved against
-  // the project directory and read as contained.
+  // the project directory and read as contained. That is still the thing being
+  // tested; what changed is the answer these get instead of a relative one.
+  //
+  // Refusing them outright — `{abs: '', unknown: true}` — looked like the
+  // cautious choice and was strictly weaker than saying "outside the project",
+  // because downstream an empty `abs` means "this action touches no path" and a
+  // floor with no target does not fire. It was also wrong on the facts:
+  // `\\?\Volume{GUID}\...` and `\\?\GLOBALROOT\Device\HarddiskVolumeN\...` are
+  // ordinary openable paths that need no privilege, and `readFileSync` on the
+  // first returns the credential.
+  //
+  // So they are resolved like anything else. What must hold, whether the volume
+  // exists on this machine or not, is that they never read as inside the
+  // project.
   for (const p of ['\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\secret.txt', '\\\\.\\Volume{1}\\x', '\\\\.\\pipe\\x']) {
     test(JSON.stringify(p), () => {
       const c = canonicalize(p, WS);
-      assert.equal(c.unknown, true, 'a path we cannot place must not be placed inside the project');
-      assert.equal(c.abs, '');
+      for (const cand of candidatesOf(c)) {
+        assert.equal(isInside(cand, WS), false, `${cand} read as inside the project`);
+        assert.equal(path.isAbsolute(cand), true, `${cand} is not absolute, so it was reduced to a relative remainder`);
+      }
+      // And whichever way it went, the engine keeps a target for it rather than
+      // dropping the path on the floor.
+      const a = analyze({ agent: 't', tool: 'Read', input: { file_path: p }, cwd: WS, sessionId: 's', at: AT }, CTX).actions[0]!;
+      assert.equal(a.targets.length, 1, 'a device-namespace path must still produce a target');
+      assert.equal(a.targets[0]!.inWorkspace, false);
+      assert.notEqual(a.capability, 'fs.read.workspace');
     });
   }
+
+  test('a volume path that does resolve names the same file as its drive-letter spelling', () => {
+    // The device spelling is not a different file, so it must not be a
+    // different learned thing either. `\\?\C:\` is the always-available form of
+    // the same trick; the GUID form resolves identically where the machine has
+    // one.
+    const plain = path.join(WS, 'src', 'a.ts');
+    const device = '\\\\?\\' + plain;
+    assert.equal(canonicalize(device, WS).abs, canonicalize(plain, WS).abs);
+  });
+
+  test('a credential reached through a device path is still a credential', () => {
+    // The exploit this closes: the same key, spelled so that resolution used to
+    // give up, must not lose its floor.
+    const key = path.join(os.homedir(), '.ssh', 'id_rsa');
+    for (const spelling of ['\\\\?\\' + key, '\\\\.\\' + key]) {
+      const a = analyze(
+        { agent: 't', tool: 'Read', input: { file_path: spelling }, cwd: WS, sessionId: 's', at: AT },
+        CTX,
+      ).actions[0]!;
+      assert.equal(a.capability, 'secret.read', `${spelling} judged as ${a.capability}`);
+      assert.equal(a.targets[0]?.secret, true);
+    }
+  });
 
   test('but the ordinary extended-length forms still resolve', () => {
     assert.equal(canonicalize('\\\\?\\C:\\Windows\\x', WS).unknown, false);
