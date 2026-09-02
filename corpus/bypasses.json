@@ -650,14 +650,14 @@
     {
       "id": "unresolvable-paths/refused-component-to-ssh",
       "class": "unresolvable-paths",
-      "command": "cat \"C:/pagefile.sys/../../Users/me/.ssh/id_rsa\"",
+      "command": "cat \"C:/pagefile.sys/../../Users/you/.ssh/id_rsa\"",
       "expect": "not-allow",
       "note": "C:\\pagefile.sys exists on every Windows install and lstat on it returns EPERM, so the physical walk is refused. Windows collapses the .. lexically and opens the key anyway. The refusal must not read as 'this command touches no file'."
     },
     {
       "id": "unresolvable-paths/refused-component-to-aws",
       "class": "unresolvable-paths",
-      "command": "cat C:/hiberfil.sys/../../Users/me/.aws/credentials",
+      "command": "cat C:/hiberfil.sys/../../Users/you/.aws/credentials",
       "expect": "not-allow",
       "note": "Any unstattable prefix will do; hiberfil.sys, swapfile.sys and DumpStack.log.tmp are the other stock ones. Fixing the spelling would be pointless — the class is 'the walk was refused'."
     },
@@ -671,28 +671,28 @@
     {
       "id": "unresolvable-paths/refused-component-copy-out",
       "class": "unresolvable-paths",
-      "command": "cp C:/swapfile.sys/../../Users/me/.ssh/id_rsa /tmp/loot",
+      "command": "cp C:/swapfile.sys/../../Users/you/.ssh/id_rsa /tmp/loot",
       "expect": "not-allow",
       "note": "A copy rather than a read: the source keeps its credential status even when the resolver could not place it."
     },
     {
       "id": "unresolvable-paths/refused-component-sweep",
       "class": "unresolvable-paths",
-      "command": "grep -r AKIA C:/pagefile.sys/../../Users/me/.aws",
+      "command": "grep -r AKIA C:/pagefile.sys/../../Users/you/.aws",
       "expect": "not-allow",
       "note": "A recursive search rooted at an unplaceable credential directory — the sweep and the unplaceable spelling stacked."
     },
     {
       "id": "unresolvable-paths/device-globalroot",
       "class": "unresolvable-paths",
-      "command": "cat //?/GLOBALROOT/Device/HarddiskVolume1/Users/me/.ssh/id_rsa",
+      "command": "cat //?/GLOBALROOT/Device/HarddiskVolume1/Users/you/.ssh/id_rsa",
       "expect": "not-allow",
       "note": "The NT device namespace opens ordinary files with no privilege, and HarddiskVolume1..8 enumerates every volume without needing a GUID."
     },
     {
       "id": "unresolvable-paths/device-volume-guid",
       "class": "unresolvable-paths",
-      "command": "cat //./Volume{00000000-0000-0000-0000-000000000000}/Users/me/.ssh/id_rsa",
+      "command": "cat //./Volume{00000000-0000-0000-0000-000000000000}/Users/you/.ssh/id_rsa",
       "expect": "not-allow",
       "note": "The volume-GUID spelling of the same file. It was declared unplaceable although Node opens it, so the credential floor went quiet."
     }

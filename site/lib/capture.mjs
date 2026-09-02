@@ -174,6 +174,10 @@ export function assertClean(text, where) {
   // through. The terminator is "anything that is not part of a name".
   const END = String.raw`(?=$|[\\/\s"'<>)\]:,;]|&lt;)`;
 
+  // Files Windows holds open at the root of C:. Fixed names, present on every
+  // install, and named on purpose by the traversal cases in the bypass corpus.
+  const LOCKED_ROOT_FILES = String.raw`(?:pagefile\.sys|hiberfil\.sys|swapfile\.sys|DumpStack\.log(?:\.tmp)?)`;
+
   const bad = [
     [new RegExp(String.raw`[\\/]Users[\\/](?!${PLACEHOLDER})[^\\/\s"'<)]+`, 'i'), 'a real user directory'],
     [new RegExp(String.raw`[\\/]home[\\/](?!${PLACEHOLDER})[a-z0-9_.-]+${END}`, 'i'), 'a real home directory'],
@@ -182,9 +186,18 @@ export function assertClean(text, where) {
     // was anchored to `LeastGrant` and so only worked because the checkout
     // happened to live at D:\LeastGrant; a clone anywhere else leaked silently.
     // Placeholders and the two paths the docs legitimately show are excluded.
+    //
+    // So are the locked files Windows keeps at the root of every install.
+    // They are not anybody's directory — the names are the same on every
+    // machine — and the published bypass corpus needs them verbatim, because
+    // being unopenable is precisely what those attacks use them for: a path
+    // walk refused at `C:\pagefile.sys\..\..` used to make the whole path
+    // "unplaceable", which switched off every floor keyed to it. Rewriting them
+    // to a placeholder would publish an attack that no longer describes the
+    // attack.
     [
       new RegExp(
-        String.raw`\b[A-Za-z]:[\\/](?!Users[\\/]${PLACEHOLDER}|Program Files|Windows[\\/]|path[\\/]|srv[\\/])[A-Za-z0-9_.\-]{2,}[\\/]`,
+        String.raw`\b[A-Za-z]:[\\/](?!Users[\\/]${PLACEHOLDER}|Program Files|Windows[\\/]|path[\\/]|srv[\\/]|${LOCKED_ROOT_FILES}[\\/])[A-Za-z0-9_.\-]{2,}[\\/]`,
       ),
       'a Windows absolute path',
     ],
