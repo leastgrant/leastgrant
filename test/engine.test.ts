@@ -497,6 +497,10 @@ function fam(over: Partial<Familiarity> = {}): Familiarity {
     ...base,
     approvedSessions: over.approvedSessions ?? base.sessions,
     approvedDays: over.approvedDays ?? base.days,
+    // Enough span to satisfy the gate by default, for the same reason: a case
+    // that says `days: 2` means "approved on two occasions", and every one of
+    // them predates the span check. A case that wants to test the span sets it.
+    approvedSpanMs: over.approvedSpanMs ?? Math.max(0, (base.days - 1)) * 86_400_000,
   };
 }
 

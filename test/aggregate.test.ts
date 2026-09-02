@@ -242,3 +242,43 @@ describe('the day and session gate counts approvals, not sightings', () => {
     assert.equal(canPromote(f, NIL, DEFAULT_THRESHOLDS).eligible, true);
   });
 });
+
+describe('the day gate wants spread, not a calendar boundary', () => {
+  // `approvedDays` counts distinct UTC day indices, so eleven approvals eleven
+  // seconds apart across midnight were two days — and with two session ids,
+  // enough to promote. The gate exists to stop one sitting from teaching a
+  // habit, and a calendar boundary is not a sitting.
+  const NIL: BlastRadius = { reach: 'workspace', reversibility: 'easy', exposure: 'none', scale: 'single' };
+  const MIDNIGHT = Math.floor(AT / 86_400_000) * 86_400_000;
+
+  const burst = (spreadMs: number): Familiarity => {
+    const env = newEnvelope('project', 'span');
+    for (let i = 0; i < 11; i++) {
+      observe(env, {
+        signature: 'sig', capability: 'exec.test', blast: NIL, evidence: 'confirmed',
+        at: MIDNIGHT - spreadMs / 2 + (i * spreadMs) / 10,
+        sessionId: i < 6 ? 'a' : 'b',
+        display: 'x',
+      });
+    }
+    return familiarity(env, { signature: 'sig', capability: 'exec.test', blast: NIL, at: MIDNIGHT + 86_400_000 }, DEFAULT_THRESHOLDS);
+  };
+
+  test('eleven approvals in eleven seconds across midnight do not promote', () => {
+    const f = burst(11_000);
+    assert.equal(f.approvedDays, 2, 'the calendar boundary still reads as two days');
+    assert.equal(f.approvedSessions, 2);
+    assert.equal(
+      canPromote(f, NIL, DEFAULT_THRESHOLDS).eligible,
+      false,
+      'a midnight crossing bought the two-day gate in eleven seconds',
+    );
+  });
+
+  test('the same approvals genuinely spread over hours do promote', () => {
+    // The other half. Approving at 23:40 and again at 08:10 is a real second
+    // occasion and must still count — the span check only has to exceed one
+    // sitting, not one night.
+    assert.equal(canPromote(burst(8 * 3_600_000), NIL, DEFAULT_THRESHOLDS).eligible, true);
+  });
+});

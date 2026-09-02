@@ -566,7 +566,19 @@ describe('redact removes credentials', () => {
   test('an AWS secret access key, which contains slashes', () => {
     // The slash-containing case matters: it is what the path exemption below
     // has to be careful not to swallow.
-    assertRedacted(`aws configure set aws_secret_access_key ${AWS_SECRET}`, AWS_SECRET, 'high-entropy');
+    //
+    // Labelled `config-secret` rather than `high-entropy`, and that is the
+    // better answer of the two. Entropy is a guess that this looks like random
+    // bytes; `config-secret` is a structural match on the setting name, so it
+    // says *why* — this is the value of `aws_secret_access_key`. A secret that
+    // happened to be low-entropy would slip past the guess and not past this.
+    assertRedacted(`aws configure set aws_secret_access_key ${AWS_SECRET}`, AWS_SECRET, 'config-secret');
+  });
+
+  test('a low-entropy credential in the same position is still caught', () => {
+    // The point of the structural rule: `hunter2` is not high-entropy and the
+    // heuristic would have let it through.
+    assertRedacted('aws configure set aws_secret_access_key hunter2', 'hunter2', 'config-secret');
   });
 
   test('several secrets on one line are all removed', () => {

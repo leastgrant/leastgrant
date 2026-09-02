@@ -212,3 +212,31 @@ describe('a SQL statement that carries more statements is not its first verb', (
     assert.equal(trailing.signature, plain.signature);
   });
 });
+
+describe('a secret store addresses slots, and the slot name is not the secret', () => {
+  // A tool whose NAME says its arguments are sensitive — vault, keychain,
+  // get_secret — had every argument value replaced with `<redacted>`. That
+  // protects the secret and destroys the identity:
+  //
+  //   get_secret({name: 'db-password'})  ->  (name=<redacted>)
+  //   get_secret({name: 'stripe-key'})   ->  (name=<redacted>)
+  //
+  // so approving a read of one secret approved reading every secret in the
+  // store. The widest possible grant from the narrowest possible approval.
+  test('two different secrets are two different learned things', () => {
+    assert.notEqual(
+      act('mcp__vault__get_secret', { name: 'db-password' }).signature,
+      act('mcp__vault__get_secret', { name: 'stripe-key' }).signature,
+      'approving one vault read approved the whole vault',
+    );
+  });
+
+  test('the value is still never written down', () => {
+    // The fix must not become "stop redacting". A selector key keeps its value;
+    // anything that could hold the credential itself does not.
+    const s = act('mcp__vault__set_secret', { name: 'db-password', value: 'hunter2-actual' }).signature;
+    assert.match(s, /name=db-password/);
+    assert.ok(!s.includes('hunter2-actual'), s);
+    assert.ok(!act('mcp__vault__put', { data: 'sk_live_abc123' }).signature.includes('sk_live_abc123'));
+  });
+});

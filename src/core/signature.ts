@@ -345,12 +345,39 @@ export function mcpArgSignature(input: Record<string, unknown>, ctx: SignatureCt
 function shapeObject(o: Record<string, unknown>, ctx: SignatureCtx, depth: number, allSecret = false): string[] {
   const keys = Object.keys(o).sort();
   const shown = keys.slice(0, 16);
-  const parts = shown.map(
-    (k) => `${k}=${shapeValue(o[k], ctx, depth, allSecret || SECRETISH_KEY.test(k), FREETEXT_KEY.test(k))}`,
-  );
+  const parts = shown.map((k) => {
+    // Under a secret-shaped tool, a key that *names* what to fetch is not the
+    // thing being fetched, and treating it as one collapsed the whole vault.
+    //
+    //   mcp__vault__get_secret({name: 'db-password'})
+    //   mcp__vault__get_secret({name: 'stripe-key'})
+    //
+    // both signed as `(name=<redacted>)`, so approving a read of one secret
+    // approved reading every secret in the store — the widest possible grant
+    // from the narrowest possible approval.
+    //
+    // Selectors keep their normalized value; everything else under such a tool
+    // stays fully redacted. Deciding by key rather than by value is deliberate:
+    // a hash of the value would preserve identity too, but 32 bits of SHA-256
+    // over a weak password is a dictionary attack against the ledger, and the
+    // ledger is a file we ask people to read.
+    const secretish = (allSecret && !SELECTOR_KEY.test(k)) || SECRETISH_KEY.test(k);
+    return `${k}=${shapeValue(o[k], ctx, depth, secretish, FREETEXT_KEY.test(k))}`;
+  });
   if (keys.length > shown.length) parts.push(`+${keys.length - shown.length} more`);
   return parts;
 }
+
+/**
+ * Keys that say *which* item, not *what it is*.
+ *
+ * Only consulted for a tool whose name already marked every argument sensitive,
+ * so the bar is "could this plausibly hold the credential itself". A secret
+ * store's `name`, `path`, `mount` and `version` address a slot; `value`,
+ * `data`, `secret` and `payload` are the slot's contents and stay redacted —
+ * `SECRETISH_KEY` catches those independently anyway.
+ */
+const SELECTOR_KEY = /^(?:name|key_?name|secret_?name|id|path|mount|engine|namespace|project|version|field|label|alias|slot)$/i;
 
 function shapeValue(v: unknown, ctx: SignatureCtx, depth: number, secretish: boolean, freetext = false): string {
   if (v === null) return '<null>';

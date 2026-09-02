@@ -298,3 +298,35 @@ describe('two rules that were narrower than their own documentation', () => {
     }
   });
 });
+
+describe('credential flags in the spellings real tools use', () => {
+  const cases: [string, string][] = [
+    ['sshpass -p hunter2 ssh host', 'hunter2'],
+    ['mycli -p hunter2', 'hunter2'],
+    ['aws configure set aws_secret_access_key AKIAIOSFODNN7EXAMPLE', 'AKIAIOSFODNN7EXAMPLE'],
+    ['npm config set //registry.example/:_authToken abc123def456', 'abc123def456'],
+    ['deploy --registry-token abc123def456', 'abc123def456'],
+    ['tool --vault-password hunter2', 'hunter2'],
+    ['git clone https://sometoken12345678901234@example.com/o/r.git', 'sometoken12345678901234'],
+  ];
+  for (const [cmd, secret] of cases) {
+    test(cmd.slice(0, 46), async () => {
+      const { redact } = await import('../src/core/secrets.js');
+      assert.ok(!redact(cmd).includes(secret), redact(cmd));
+    });
+  }
+
+  test('a path that merely names where a credential lives is kept', () => {
+    // `--vault-password-file /tmp/p` points at a file. The path is not the
+    // secret and losing it would lose the difference between reading one file
+    // and another — which is the whole point of a signature.
+    const out = redact('ansible --vault-password-file /tmp/p');
+    assert.match(out, /\/tmp\/p/);
+  });
+
+  test('an ordinary username in a URL is not a token', () => {
+    for (const s of ['https://git@github.com/o/r.git', 'ssh://deploy@host/p', 'https://alice@example.com/x']) {
+      assert.equal(redact(s), s);
+    }
+  });
+});

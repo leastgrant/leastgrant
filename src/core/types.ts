@@ -211,6 +211,15 @@ export interface SignatureStat {
    */
   approvedSessions?: number;
   approvedDays?: number;
+  /**
+   * When the first and last approval happened.
+   *
+   * `approvedDays` counts distinct UTC day indices, so two approvals eleven
+   * seconds apart across midnight are two days. The gate is about spread, and
+   * a calendar boundary is not spread — this is what lets it ask.
+   */
+  firstApprovedAt?: number;
+  lastApprovedAt?: number;
   /** Worst blast radius ever seen for this signature. */
   worstBlast: BlastRadius;
   /** Sample display strings, redacted, for the UI. Capped. */
@@ -318,6 +327,8 @@ export interface Familiarity {
   /** Distinct sessions and days on which a human actually approved. */
   approvedSessions: number;
   approvedDays: number;
+  /** Milliseconds between the first and last approval. */
+  approvedSpanMs: number;
   /** Lower bound of a Wilson interval on the approval rate. */
   approvalLowerBound: number;
   /** True if this signature has never been seen in this scope before. */

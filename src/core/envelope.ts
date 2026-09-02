@@ -72,6 +72,23 @@ export function approvalsNeededFor(confidence: number, z = Z): number {
   return Math.ceil((confidence * z * z) / (1 - confidence));
 }
 
+/**
+ * How far apart the first and last approval must be.
+ *
+ * `approvedDays` counts distinct UTC day indices, and eleven approvals eleven
+ * seconds apart across midnight are two of them — measured, and enough to
+ * promote. The gate exists to stop one sitting from teaching a habit, and a
+ * calendar boundary is not a sitting.
+ *
+ * An hour per day required beyond the first. Deliberately far below a real
+ * day: approving something at 23:40 and again at 08:10 is genuinely a second
+ * occasion and must still count, so this only has to exceed the length of one
+ * sitting, not the length of a night. Not a configurable threshold, because it
+ * is not a policy choice — it is what `minDays` already meant.
+ */
+const SITTING_MS = 3_600_000;
+const requiredSpan = (th: Thresholds): number => Math.max(0, th.minDays - 1) * SITTING_MS;
+
 export const DEFAULT_THRESHOLDS: Thresholds = {
   minSessions: 2,
   minDays: 2,
@@ -344,6 +361,18 @@ export function observe(env: Envelope, input: ObserveInput, th: Thresholds = DEF
   // count — there, observations are the evidence, and requiring approvals would
   // be requiring the thing that route exists to do without.
   if (isApproval) {
+    // When the approvals happened, so a gate about spread can ask about spread.
+    //
+    // `approvedDays` counts distinct UTC day indices, and two approvals eleven
+    // seconds apart across midnight are two of them. The gate exists to stop
+    // one sitting from teaching a habit, and a calendar boundary is not a
+    // sitting — measured: eleven approvals inside eleven seconds satisfied
+    // "two days, two sessions" and promoted.
+    if (usableTime) {
+      s.firstApprovedAt = Math.min(s.firstApprovedAt ?? input.at, input.at);
+      s.lastApprovedAt = Math.max(s.lastApprovedAt ?? input.at, input.at);
+    }
+
     const okDays = m._approvedDays ?? (m._approvedDays = []);
     if (usableTime && !okDays.includes(day)) {
       s.approvedDays = (s.approvedDays ?? 0) + 1;
@@ -432,6 +461,7 @@ export function familiarity(
       days: 0,
       approvedSessions: 0,
       approvedDays: 0,
+      approvedSpanMs: 0,
       approvalLowerBound: 0,
       novel: true,
       novelTransition: q.previousCapability
@@ -484,6 +514,7 @@ export function familiarity(
     days: s.days,
     approvedSessions: s.approvedSessions ?? 0,
     approvedDays: s.approvedDays ?? 0,
+    approvedSpanMs: Math.max(0, (s.lastApprovedAt ?? 0) - (s.firstApprovedAt ?? 0)),
     approvalLowerBound: wilsonLowerBound(confirmed, confirmed + denied),
     novel: false,
     novelTransition: q.previousCapability
@@ -560,7 +591,12 @@ export function canPromote(
   let humanGap: PromotionResult | null = null;
   if (fam.confirmed >= 1) {
     const have = wilsonLowerBound(fam.confirmed, fam.confirmed + fam.denied);
-    if (have >= required && fam.approvedDays >= th.minDays && fam.approvedSessions >= th.minSessions) {
+    if (
+      have >= required &&
+      fam.approvedDays >= th.minDays &&
+      fam.approvedSessions >= th.minSessions &&
+      fam.approvedSpanMs >= requiredSpan(th)
+    ) {
       return { eligible: true, reason: 'promoted', required, have };
     }
     humanGap =
@@ -577,7 +613,7 @@ export function canPromote(
             required,
             have,
           }
-        : fam.approvedDays < th.minDays
+        : fam.approvedDays < th.minDays || fam.approvedSpanMs < requiredSpan(th)
           ? { eligible: false, reason: 'needs-more-days', required, have }
           : { eligible: false, reason: 'needs-more-sessions', required, have };
   }

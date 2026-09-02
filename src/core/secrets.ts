@@ -412,6 +412,20 @@ const RULES: RedactRule[] = [
   // passwords contain `@` and stopping at the first one leaves the tail of the
   // secret in the ledger.
   { rx: /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@«»]+):([^\s/«»]+)@/gi, label: 'url-password' },
+  // The same thing with no colon: `https://<token>@host`.
+  //
+  // This is the documented clone form for a GitHub or GitLab personal access
+  // token, and the rules above only catch it when the token has a recognisable
+  // prefix — `ghp_`, `glpat-`. A token from anywhere else, or a future GitHub
+  // prefix, went into the ledger whole.
+  //
+  // Length is what separates a credential from a username here. Sixteen
+  // characters of `[A-Za-z0-9_-]` with no `.` is not a person's login name; it
+  // is a token. `https://git@host` and `https://alice@host` are untouched.
+  {
+    rx: /(\b[a-z][a-z0-9+.-]*:\/\/)([A-Za-z0-9_-]{16,})@/gi,
+    label: 'url-token',
+  },
   // Authorization headers, whatever the scheme is called.
   //
   // This listed four scheme names — Bearer, Basic, Token, ApiKey — while the
@@ -428,7 +442,24 @@ const RULES: RedactRule[] = [
     label: 'auth-header',
   },
   // Common CLI password flags.
+  //
+  // The list is the spellings real tools use, which is wider than the obvious
+  // ones. Measured leaks before these were added: `sshpass -p`, `--vault-pass`,
+  // `--vault-password-file`, `_authToken`, and
+  // `aws configure set aws_secret_access_key` — all of which put the value into
+  // ledger.jsonl and the envelope verbatim.
   { rx: /(--?(?:password|passwd|pwd|token|api[-_]?key|secret|auth)[= ])(?!\s)("[^"]*"|'[^']*'|\S+)/gi, label: 'flag-value' },
+  // `sshpass -p SECRET` and `sshpass -pSECRET`. Like mysql's `-p`, the letter
+  // means password in this program and essentially nowhere else, so it is
+  // matched only when `sshpass` is the program being run.
+  { rx: /(\bsshpass\s+(?:[^\n;&|]*?\s)?-p\s?)(?!\s)("[^"]*"|'[^']*'|\S+)/gi, label: 'sshpass' },
+  // Any `--*-pass`, `--*-password`, `--*-secret`, `--*-token` or `--*-key`
+  // variant, which is how tools spell it once they have more than one:
+  // `--vault-password`, `--registry-token`, `--signing-key`.
+  //
+  // A `-file` suffix names a path rather than the credential, and the path is
+  // worth keeping: it is the difference between reading one file and another.
+  { rx: /(--[a-z][a-z0-9-]*-(?:passwd|password|pass|secret|token|apikey|api-key)[= ])(?!\s)("[^"]*"|'[^']*'|\S+)/gi, label: 'flag-value' },
   // mysql -pSECRET (no space).
   //
   // `-p` glued to its value means "password" in the mysql/mariadb clients and
@@ -441,7 +472,7 @@ const RULES: RedactRule[] = [
   //
   // The gap excludes `;&|` so the match cannot jump a command separator and
   // steal the `-p` belonging to some later program in the same line.
-  { rx: /((?:^|[\s;&|(])(?:mysql|mariadb)[\w-]*[^\n;&|]*?\s-p)(?!\s)([^\s'"]{4,})/gi, label: 'mysql-password' },
+  { rx: /((?:^|[\s;&|(])(?:mysql|mariadb|mycli)[\w-]*[^\n;&|]*?\s-p)(?!\s)([^\s'"]{4,})/gi, label: 'mysql-password' },
   // `mysql -p hunter2` - the same flag with a space. Anchored to the same
   // command family for the same reason, and the value must not look like a
   // port number, because `-p 3306` is the other thing that spelling means.
@@ -450,7 +481,7 @@ const RULES: RedactRule[] = [
   // the rules: the spaced form was reaching `denials.jsonl`, which is
   // append-only and never pruned, so it outlived every other copy.
   {
-    rx: /((?:^|[\s;&|(])(?:mysql|mariadb)[\w-]*[^\n;&|]*?\s-p\s+)(?!\d+(?:\s|$))([^\s'"]{4,})/gi,
+    rx: /((?:^|[\s;&|(])(?:mysql|mariadb|mycli)[\w-]*[^\n;&|]*?\s-p\s+)(?!\d+(?:\s|$))([^\s'"]{4,})/gi,
     label: 'mysql-password',
   },
   // `curl -u user:password`. The user half is kept: it is not the secret, and
@@ -476,6 +507,19 @@ const RULES: RedactRule[] = [
     rx: /\b((?:[A-Za-z_][A-Za-z0-9_]*)?(?:TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?|AUTH)[A-Za-z0-9_]*)=(?![\u00ab<])("[^"]*"|'[^']*'|\S+)/gi,
     label: 'env-secret',
   },
+  // The same credential names, given as a positional argument to a
+  // configuration command rather than as an assignment:
+  // `aws configure set aws_secret_access_key \u2026`,
+  // `npm config set //registry/:_authToken \u2026`.
+  //
+  // After env-secret, deliberately. This is the broader of the two, and running
+  // it first meant it swallowed every `NAME=value` match and relabelled it, so
+  // a reader lost the more specific reason the value had been removed. Space
+  // only, since the `=` form is env-secret's. Same marker guard, same reason.
+  {
+    rx: /((?:^|[\s;&|])[A-Za-z_/][A-Za-z0-9_./:-]*(?:_authtoken|_?secret_access_key|_?access_token|_?api_?key|password|secret)\s+)(?![\s\u00ab<-])("[^"]*"|'[^']*'|\S+)/gi,
+    label: 'config-secret',
+  },
 ];
 
 /** Replacement marker. Distinctive so tests and humans can spot it. */
@@ -498,10 +542,16 @@ export function redact(text: string): string {
       switch (r.label) {
         case 'url-password':
           return `${groups[0]}:${mark('url-password')}@`;
+        case 'url-token':
+          return `${groups[0]}${mark('url-token')}@`;
         case 'auth-header':
           return `${groups[0]}${mark('auth-header')}`;
         case 'flag-value':
           return `${groups[0]}${mark('flag-value')}`;
+        case 'sshpass':
+          return `${groups[0]}${mark('sshpass')}`;
+        case 'config-secret':
+          return `${groups[0]}${mark('config-secret')}`;
         case 'mysql-password':
           return `${groups[0]}${mark('mysql-password')}`;
         case 'basic-auth':
