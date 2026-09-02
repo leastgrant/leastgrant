@@ -92,61 +92,92 @@ interface AntigravityInput {
   error?: string;
 }
 
-/** Events the parser accepts, exact-cased Go field names. */
-const EVENTS = new Set(['pretooluse', 'posttooluse', 'sessionstart', 'preinvocation', 'postinvocation', 'stop']);
-
-export function isAntigravityEvent(name: string): boolean {
-  return EVENTS.has(String(name).toLowerCase());
+/**
+ * There is no event name on the wire, and assuming one cost this adapter its
+ * first release.
+ *
+ * `hook_event_name` and `hookEventName` occur ZERO times in the 153 MB runtime.
+ * The event is a protobuf *oneof* on HookArgs — pre_tool_hook_args against
+ * post_tool_hook_args — so it is structural, never a string. The first version
+ * of this file gated dispatch on that field, so the adapter never ran: every
+ * tool call on Antigravity went unenforced, and the test suite was green
+ * because it synthesised the field in all eleven cases.
+ *
+ * What distinguishes the two events is what the payload carries. PreToolUse has
+ * `toolCall`; PostToolUse has `stepIdx` and an optional `error` and no
+ * `toolCall` at all.
+ */
+export function isPreToolUse(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false;
+  const call = (input as Record<string, unknown>)['toolCall'];
+  return !!call && typeof call === 'object';
 }
 
 /**
- * Is this Antigravity's payload rather than Claude Code's?
+ * Is this Antigravity's payload rather than another agent's?
  *
- * `PreToolUse` and `PostToolUse` are the same event names Claude Code uses, so
- * the name alone cannot route. The payloads are unmistakable though: Antigravity
- * nests the call under `toolCall` and carries `conversationId`, where Claude
- * Code has flat `tool_name`/`tool_input` and `session_id`.
+ * Shape only, because there is no event name to route on. Claude Code and Codex
+ * send flat `tool_name`/`tool_input`; Antigravity nests under `toolCall` and
+ * carries `conversationId`.
  */
 export function looksLikeAntigravity(input: unknown): boolean {
   if (!input || typeof input !== 'object') return false;
   const o = input as Record<string, unknown>;
   if (o['tool_name'] !== undefined || o['tool_input'] !== undefined) return false;
-  return typeof o['conversationId'] === 'string' || (!!o['toolCall'] && typeof o['toolCall'] === 'object');
+  if (typeof o['conversationId'] === 'string') return true;
+  return !!o['toolCall'] && typeof o['toolCall'] === 'object';
 }
 
 /**
- * Antigravity's tool names, mapped to the shapes the engine already reasons
- * about, so a command judged here shares its learned history with the same
- * command under any other agent.
+ * Antigravity's tool names and argument keys, mapped onto the shapes the engine
+ * already reasons about.
  *
- * Only the classes whose arguments the engine can actually read are translated.
- * Everything else keeps its own name and is judged as an opaque call — which is
- * the honest answer, and is what `mcp.call` already does.
+ * Names are snake_case: the shipped documentation says they are "derived by
+ * lowercasing the step type and removing the CORTEX_STEP_TYPE_ prefix", and the
+ * matcher examples are `run_command`, `view_file`, `browser_.*`. The first
+ * version of this map used PascalCase converter names — `RunCommand` — which
+ * matched nothing the runtime sends, so a credential read arrived as an
+ * unrecognised tool and degraded from `force_ask` to an ordinary cacheable ask.
+ *
+ * Argument keys are Go PascalCase and differ per tool. Only the ones that could
+ * be READ OUT OF THE BINARY are here:
+ *
+ *   run_command      {"CommandLine": "npm test", "Cwd": "/home/project/", ...}
+ *   write_to_file    {"TargetFile": "...", "CodeContent": "..."}
+ *   edit tools       {"TargetFile": "...", "CodeEdit": "..."}
+ *
+ * Deliberately nothing else. Fifty-odd more tools exist and guessing their
+ * argument keys would produce exactly the failure this map was just fixed for —
+ * a tool that looks translated, is not, and quietly loses its floor. An
+ * unmapped tool keeps its own name and is judged as an opaque call, which asks.
+ * Friction on a read is the cost; a silently-lost credential floor is not.
  */
-const TOOL_MAP: Record<string, string> = {
-  RunCommand: 'Bash',
-  SendCommandInput: 'Bash',
-  ViewFile: 'Read',
-  ReadResource: 'Read',
-  WriteToFile: 'Write',
-  KnowledgeWriteToFile: 'Write',
-  ReplaceFileContent: 'Edit',
-  SingleReplaceFileContent: 'Edit',
-  MultiReplaceFileContent: 'Edit',
-  KnowledgeReplaceFileContent: 'Edit',
-  SedFile: 'Edit',
-  NotebookEdit: 'Edit',
-  GrepSearch: 'Grep',
-  Find: 'Glob',
-  ListDir: 'LS',
-  ReadUrlContent: 'WebFetch',
-  SearchWeb: 'WebSearch',
-  InvokeSubagent: 'Agent',
-  BrowserSubagent: 'Agent',
+interface Mapping {
+  tool: string;
+  /** Antigravity's argument key -> the key the engine expects. */
+  args: Record<string, string>;
+}
+
+const TOOL_MAP: Record<string, Mapping> = {
+  run_command: { tool: 'Bash', args: { CommandLine: 'command' } },
+  send_command_input: { tool: 'Bash', args: { CommandLine: 'command' } },
+  write_to_file: { tool: 'Write', args: { TargetFile: 'file_path', CodeContent: 'content' } },
+  replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
+  single_replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
+  multi_replace_file_content: { tool: 'Edit', args: { TargetFile: 'file_path', CodeEdit: 'content' } },
 };
 
 export function toolNameOf(name: string): string {
-  return TOOL_MAP[name] ?? name;
+  return TOOL_MAP[name]?.tool ?? name;
+}
+
+/** Rename the argument keys a mapped tool uses; pass everything else through. */
+export function translateArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  const map = TOOL_MAP[name]?.args;
+  if (!map) return args;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) out[map[k] ?? k] = v;
+  return out;
 }
 
 /** What this adapter will print. */
@@ -179,27 +210,31 @@ function render(verdict: AntigravityVerdict, reason: string): string {
 
 export function runAntigravityHook(raw: unknown): void {
   const input = (raw ?? {}) as AntigravityInput;
-  const event = String((raw as Record<string, unknown>)?.['hook_event_name'] ?? '').toLowerCase();
+  const roots = Array.isArray(input.workspacePaths)
+    ? input.workspacePaths.filter((p): p is string => typeof p === 'string')
+    : [];
+  const cwd = roots[0] ?? process.cwd();
+  const sessionId = input.conversationId || 'antigravity';
 
-  // No readable tool call. What that means depends entirely on the event, and
-  // conflating the two cases turned an unreadable payload into an approval —
-  // caught by the conformance suite the hour this adapter was written.
-  //
-  //   SessionStart, PreInvocation, Stop   genuinely have no tool call. There is
-  //                                       nothing to judge, and they still need
-  //                                       an explicit answer because silence is
-  //                                       a deny.
-  //   PreToolUse with no toolCall         is a payload shape LeastGrant does not
-  //                                       recognise. That is ignorance, not
-  //                                       safety, and it gets the same answer as
-  //                                       a crash.
-  const call = input.toolCall;
-  if (!call || typeof call !== 'object' || typeof call.name !== 'string') {
-    const isToolEvent = event === 'pretooluse' || event === 'posttooluse';
-    if (!isToolEvent) {
-      process.stdout.write(render('allow', ''));
-      return;
+  // PostToolUse. No `toolCall`, and the documented output is an EMPTY object —
+  // not a decision. `PostToolHookResult` is an empty message, so nothing said
+  // here can change anything; emitting a decision would be answering a question
+  // that was not asked.
+  if (!isPreToolUse(input)) {
+    try {
+      recordPost(sessionId, String(input.executionId ?? input.stepIdx ?? ''));
+    } catch {
+      /* observation must never wedge the agent */
     }
+    process.stdout.write('{}');
+    return;
+  }
+
+  const call = input.toolCall as { name?: string; args?: unknown };
+  if (typeof call.name !== 'string' || !call.name) {
+    // A tool call with no name is a payload shape LeastGrant does not
+    // recognise. That is ignorance, not safety, and it gets the same answer as
+    // a crash — the conformance suite caught this answering `allow`.
     process.stdout.write(
       render('force_ask', 'this tool call did not arrive in a shape LeastGrant could read'),
     );
@@ -207,28 +242,17 @@ export function runAntigravityHook(raw: unknown): void {
   }
 
   const tool = toolNameOf(call.name);
-  const args =
+  const rawArgs =
     call.args && typeof call.args === 'object' && !Array.isArray(call.args)
       ? (call.args as Record<string, unknown>)
       : {};
-  const roots = Array.isArray(input.workspacePaths)
-    ? input.workspacePaths.filter((p): p is string => typeof p === 'string')
-    : [];
-  const cwd = roots[0] ?? process.cwd();
-  const sessionId = input.conversationId || 'antigravity';
+  const args = translateArgs(call.name, rawArgs);
 
-  if (event === 'posttooluse') {
-    // `PostToolHookResult` is an empty message, so nothing said here can change
-    // anything — it is observation only. Recording it is still how a signature
-    // learns it completed.
-    try {
-      recordPost(sessionId, String(input.executionId ?? input.stepIdx ?? ''));
-    } catch {
-      /* observation must never wedge the agent */
-    }
-    process.stdout.write(render('allow', ''));
-    return;
-  }
+  // `run_command` carries its own working directory, which decides where every
+  // relative path in the command lands. Dropping it judged a write outside the
+  // project as an in-project write — the same bug the Codex adapter had with
+  // `workdir`.
+  const execCwd = typeof rawArgs['Cwd'] === 'string' && rawArgs['Cwd'] ? (rawArgs['Cwd'] as string) : undefined;
 
   let outcome: PreOutcome;
   try {
@@ -240,6 +264,7 @@ export function runAntigravityHook(raw: unknown): void {
       sessionId,
       toolUseId: String(input.executionId ?? input.stepIdx ?? ''),
       permissionMode: undefined,
+      ...(execCwd ? { execCwd } : {}),
     });
   } catch (err) {
     // A crash inside LeastGrant. Exiting non-zero would make Antigravity throw

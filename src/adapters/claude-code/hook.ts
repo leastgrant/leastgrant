@@ -141,14 +141,17 @@ export async function runHook(): Promise<void> {
     // The payloads cannot be confused. Antigravity nests the call under
     // `toolCall` and carries `conversationId`; Claude Code has flat
     // `tool_name` / `tool_input`.
-    const { isAntigravityEvent, looksLikeAntigravity, runAntigravityHook } = await import(
-      '../antigravity/hook.js'
-    );
+    // Routed on SHAPE, never on an event name — Antigravity does not send one.
+    //
+    // The first version of this gated on `hook_event_name`, which occurs zero
+    // times in the runtime: the event is a protobuf oneof, not a string. The
+    // gate was also ANDed before the flag check, so `--agent antigravity` could
+    // not rescue it. The adapter therefore never ran, and every tool call on
+    // Antigravity went unenforced — while the test suite stayed green, because
+    // it synthesised the field.
+    const { looksLikeAntigravity, runAntigravityHook } = await import('../antigravity/hook.js');
     const flaggedAntigravity = agentFlag() === 'antigravity';
-    if (
-      isAntigravityEvent(String(input.hook_event_name ?? '')) &&
-      (flaggedAntigravity || looksLikeAntigravity(input))
-    ) {
+    if (flaggedAntigravity || looksLikeAntigravity(input)) {
       if (!flaggedAntigravity) {
         logLine('antigravity: routed by payload shape, not by --agent antigravity');
       }

@@ -121,14 +121,18 @@ const SHAPES: Record<string, { event: string; shell: (cmd: string) => Record<str
   // Note what is NOT here: a way to abstain. This runtime reads a missing
   // `decision` as a deny, so the adapter always answers.
   antigravity: {
+    // No `hook_event_name`, because Antigravity does not send one — the event is
+    // a protobuf oneof. Tool names are snake_case and the shell argument key is
+    // `CommandLine`. The first version of this entry used a fabricated event
+    // name and PascalCase, so it exercised a payload the runtime never emits.
     event: 'PreToolUse',
     shell: (command) => ({
-      hook_event_name: 'PreToolUse',
       conversationId: 'conf',
       workspacePaths: [WS],
       executionId: 'e1',
-      toolCall: { name: 'RunCommand', args: { command } },
-      stepIdx: 1,
+      modelName: 'auto',
+      toolCall: { name: 'run_command', args: { CommandLine: command, Blocking: true } },
+      stepIdx: 19,
     }),
   },
   // Cursor's own event and payload shape: the command sits at the top level,
