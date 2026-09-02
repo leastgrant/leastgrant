@@ -21,3 +21,6 @@ coverage/
 site/.capture/
 site/.logo-*
 site/.brand-preview.*
+
+# Worktrees created by background agents. Never part of the repository.
+.claude/worktrees/
