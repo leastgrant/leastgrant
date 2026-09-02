@@ -23,6 +23,7 @@ import { decide } from '../src/core/decide.js';
 import { newEnvelope, newSession, observe, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
 import { DEFAULT_CONFIG } from '../src/store/index.js';
 import { analyze } from '../src/core/classify.js';
+import { translate, toolNameOf } from '../src/adapters/codex/hook.js';
 import { repoRoot } from './helpers/repo-root.js';
 
 const WORKSPACE = path.join(os.tmpdir(), 'leastgrant-test-ws');
@@ -78,6 +79,39 @@ function judge(command: string, ctx: ReturnType<typeof trainedOn>): Verdict {
   return decide(req, ctx);
 }
 
+/**
+ * Put a wire-shape case through the adapter that owns its agent, then the same
+ * engine every other case uses.
+ *
+ * Deliberately routed through the real adapter rather than through a
+ * hand-written equivalent: the bug this class of case exists for lived in the
+ * translation, so a test that translated the payload itself would assert
+ * nothing. `translate` is the code that runs in production.
+ */
+function judgeWire(b: BypassCase, ctx: ReturnType<typeof trainedOn>): Verdict {
+  const wire = b.wire!;
+  assert.equal(wire.agent, 'codex', `no adapter wired up for ${wire.agent} in the corpus runner`);
+  const tool = toolNameOf(wire.tool);
+  const t = translate({ tool_input: wire.toolInput, tool_name: wire.tool, cwd: WORKSPACE }, tool);
+  assert.ok(t.ok, `${b.id}: the adapter could not translate its own agent's payload (${String(t.why)})`);
+  const req: Request = {
+    agent: wire.agent,
+    tool,
+    input: t.input,
+    cwd: t.execCwd || WORKSPACE,
+    sessionId: 'attack',
+    at: Date.now(),
+  };
+  return decide(req, ctx);
+}
+
+/** The action the engine believes a request is, for identity comparisons. */
+function identityOf(req: Request): { signature: string; capability: string; targets: number } {
+  const a = analyze(req, { roots: [WORKSPACE], secretPatterns: [] });
+  const worst = a.actions[a.actions.length - 1]!;
+  return { signature: worst.signature, capability: worst.capability, targets: worst.targets.length };
+}
+
 /** The baseline must actually be allowed, or the test proves nothing. */
 describe('training baseline', () => {
   const ctx = trainedOn(['git status', 'npm test', 'ls -la']);
@@ -103,11 +137,29 @@ interface BypassCase {
   command: string;
   expect: 'not-allow' | 'deny';
   note: string;
+  /**
+   * Delivered as an agent tool payload rather than as a command string.
+   *
+   * Some attacks are not in the text of the command at all — they are in the
+   * shape it arrives in. Codex's shell tool sends `command` as an argv array
+   * and carries a per-call `workdir`; an adapter that renamed the tool and
+   * forwarded the payload unread handed the engine something it appeared to
+   * understand and got a confident answer about a call it had never seen.
+   */
+  wire?: { agent: string; tool: string; toolInput: Record<string, unknown> };
+  /**
+   * Whether the wire form is the same action as `command` or a different one.
+   * Both directions are a real assertion: see the `identities` block in the
+   * corpus.
+   */
+  identity?: 'same' | 'distinct';
 }
 
-const CORPUS: { classes: Record<string, string>; cases: BypassCase[] } = JSON.parse(
-  fs.readFileSync(path.join(repoRoot(), 'corpus', 'bypasses.json'), 'utf8'),
-);
+const CORPUS: {
+  classes: Record<string, string>;
+  identities: Record<string, string>;
+  cases: BypassCase[];
+} = JSON.parse(fs.readFileSync(path.join(repoRoot(), 'corpus', 'bypasses.json'), 'utf8'));
 
 describe('the corpus itself is well-formed', () => {
   test('every case has a unique id', () => {
@@ -125,6 +177,24 @@ describe('the corpus itself is well-formed', () => {
     for (const c of CORPUS.cases) {
       assert.ok(c.id && c.command && c.note, `case ${c.id} is missing a field`);
       assert.ok(c.expect === 'not-allow' || c.expect === 'deny', `case ${c.id} has a bad expectation`);
+    }
+  });
+
+  test('every wire case declares an identity the corpus documents', () => {
+    // `identity` is the assertion, not a label: "same" means the payload form
+    // must analyse to the command text's signature, "distinct" means it must
+    // not. A case that declared neither would be run with no identity check at
+    // all, which is how the argv hole survived a passing test suite before.
+    for (const c of CORPUS.cases) {
+      if (!c.wire) {
+        assert.equal(c.identity, undefined, `case ${c.id} has an identity but no wire payload`);
+        continue;
+      }
+      assert.ok(c.wire.agent && c.wire.tool && c.wire.toolInput, `case ${c.id} has an incomplete wire payload`);
+      assert.ok(
+        c.identity && CORPUS.identities[c.identity],
+        `case ${c.id} declares undocumented identity ${String(c.identity)}`,
+      );
     }
   });
 
@@ -154,7 +224,7 @@ describe('bypass corpus is never auto-approved', () => {
 
   for (const b of CORPUS.cases) {
     test(b.id, () => {
-      const v = judge(b.command, ctx);
+      const v = b.wire ? judgeWire(b, ctx) : judge(b.command, ctx);
       if (b.expect === 'deny') {
         assert.equal(v.decision, 'deny', `expected deny for ${b.id}: ${b.command}\n  -> ${v.headline}`);
         return;
@@ -166,6 +236,95 @@ describe('bypass corpus is never auto-approved', () => {
       );
     });
   }
+});
+
+/**
+ * The wire cases again, at the level where they actually broke.
+ *
+ * The verdict is the weak assertion. `{"command":["bash","-lc","cat
+ * ~/.ssh/id_rsa"]}` came out `deny` under the broken code too — purely because
+ * the comma-join happened to leave the credential path space-separated and
+ * still visible — while `{"command":["sudo","rm","-rf","/var"]}` abstained. A
+ * suite that only checked verdicts would have called the first one covered.
+ *
+ * So the identity is asserted directly: the signature, the capability and the
+ * target count the engine ends up with. That is what learning keys on, and it
+ * is what a later refactor can quietly break while leaving the verdict right.
+ */
+describe('a payload shape is the action it describes, not a shape near it', () => {
+  const wireCases = CORPUS.cases.filter((c) => c.wire);
+
+  test('the corpus still carries wire-shape cases at all', () => {
+    // Same reasoning as the per-class check: these are cheap to delete by
+    // accident and their absence is silent.
+    assert.ok(wireCases.length >= 5, `only ${wireCases.length} wire-shape cases in the corpus`);
+  });
+
+  for (const b of wireCases) {
+    test(`${b.id} — ${b.identity} as the command text`, () => {
+      const wire = b.wire!;
+      const tool = toolNameOf(wire.tool);
+      const t = translate({ tool_input: wire.toolInput, tool_name: wire.tool, cwd: WORKSPACE }, tool);
+      assert.ok(t.ok, `the adapter could not read its own agent's payload: ${String(t.why)}`);
+
+      const asWire = identityOf({
+        agent: wire.agent, tool, input: t.input,
+        cwd: t.execCwd || WORKSPACE, sessionId: 'x', at: Date.now(),
+      });
+      const asText = identityOf({
+        agent: wire.agent, tool: 'Bash', input: { command: b.command },
+        cwd: WORKSPACE, sessionId: 'x', at: Date.now(),
+      });
+
+      if (b.identity === 'distinct') {
+        assert.notEqual(
+          asWire.signature,
+          asText.signature,
+          `${b.id} shares a learned identity with the plain command, so trust in one is trust in both`,
+        );
+        return;
+      }
+      assert.equal(asWire.signature, asText.signature, `${b.id}: the payload form learned a different identity`);
+      assert.equal(asWire.capability, asText.capability, `${b.id}: the payload form got a different capability`);
+      assert.equal(asWire.targets, asText.targets, `${b.id}: the payload form lost targets`);
+    });
+  }
+
+  test('argv payloads that mean different things do not collapse onto one signature', () => {
+    // The specific damage: String(argv) joins on commas, baseName takes the
+    // last path segment, and three unrelated commands all became `var`.
+    const sigs = [
+      ['sudo', 'rm', '-rf', '/var'],
+      ['ls', '-la', '/var'],
+      ['cp', '/root/.ssh/id_rsa', '/var'],
+    ].map((argv) => {
+      const t = translate({ tool_input: { command: argv }, tool_name: 'shell', cwd: WORKSPACE }, 'Bash');
+      assert.ok(t.ok);
+      return identityOf({
+        agent: 'codex', tool: 'Bash', input: t.input, cwd: WORKSPACE, sessionId: 'x', at: Date.now(),
+      }).signature;
+    });
+    assert.equal(new Set(sigs).size, 3, `argv commands collapsed onto ${JSON.stringify(sigs)}`);
+  });
+
+  test('the engine no longer invents a command out of a non-string', () => {
+    // Defence in depth for every other adapter. `safeString` promised that a
+    // non-string comes back as the unresolved marker and quietly did not: an
+    // array has a toString, so it took the coercion path and produced a
+    // plausible-looking command no shell would ever run.
+    const a = analyze(
+      {
+        agent: 't', tool: 'Bash', input: { command: ['sudo', 'rm', '-rf', '/var'] },
+        cwd: WORKSPACE, sessionId: 's', at: Date.now(),
+      },
+      { roots: [WORKSPACE], secretPatterns: [] },
+    );
+    assert.equal(a.understood, false, 'an untranslated argv array must not read as a understood command');
+    assert.ok(
+      !a.actions.some((x) => x.signature === 'var'),
+      'the comma-join is back: three commands share the program name `var`',
+    );
+  });
 });
 
 describe('the parser does not silently swallow anything', () => {

@@ -213,6 +213,29 @@ export function judgePre(p: {
   sessionId: string;
   toolUseId: string;
   permissionMode?: string;
+  /**
+   * Where the command will actually run, when the agent says so and it is not
+   * the session directory. Codex's shell tool has a `workdir` parameter; a
+   * per-call working directory is an implicit `cd` in front of the command.
+   *
+   * Deliberately separate from `cwd`. `cwd` answers "which project is this",
+   * and using the execution directory for that would be worse than ignoring
+   * it: a `workdir` of `~` would make the *home directory* the project root,
+   * so a write to `~/anything` would come back as an in-project write. `cwd`
+   * finds the project; this places the paths.
+   */
+  execCwd?: string;
+  /**
+   * Override for "was a human in the loop", when the adapter knows better than
+   * `permission_mode` does.
+   *
+   * The only signal in a hook payload is the permission mode, and on some
+   * agents it does not answer the question — see the Codex adapter, where
+   * LeastGrant has no prompt at all and `default` does not imply anybody was
+   * asked. An adapter that knows its agent cannot reach a human says so here
+   * rather than letting the shared default manufacture `confirmed` evidence.
+   */
+  attended?: boolean;
 }): PreOutcome {
   const started = Date.now();
   const cwd = p.cwd || process.cwd();
@@ -233,7 +256,10 @@ export function judgePre(p: {
     agent: p.agent,
     tool: p.tool || 'unknown',
     input: p.input ?? {},
-    cwd,
+    // The directory the command runs in, which is what every relative path in
+    // it resolves against. Usually the session directory; not when the agent
+    // named a different one per call.
+    cwd: p.execCwd || cwd,
     sessionId: p.sessionId || 'unknown',
     agentMode: p.permissionMode,
     at: started,
@@ -329,7 +355,10 @@ export function judgePre(p: {
     // In observe posture LeastGrant emits nothing at all, so no prompt of ours
     // ever reached anybody — recording the result as `confirmed` would be the
     // tool manufacturing its own evidence.
-    attended: wasAttended(config.posture, input.permission_mode),
+    // An adapter can only ever subtract here, never add. `attended: true` from
+    // an adapter is not enough on its own, because the whole hazard is a
+    // component talking itself into the strongest evidence class.
+    attended: wasAttended(config.posture, input.permission_mode) && p.attended !== false,
     // Captured here too, so a Post arriving with a different cwd cannot credit
     // the evidence to the wrong project.
     project: key,

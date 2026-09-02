@@ -17,6 +17,23 @@ import { page } from '../lib/layout.mjs';
  * specific inputs, in this specific version, are not auto-approved. Nothing
  * about the ones nobody has thought of.
  */
+/**
+ * The payload a wire-shape case actually arrives as.
+ *
+ * Some cases are not defeated by the text of the command but by the shape it is
+ * delivered in — an argv array, a per-call working directory. Showing only the
+ * equivalent shell text would make them look like duplicates of cases already
+ * on the page, and would hide the thing the case is actually about. The shell
+ * text stays because it says what the payload *means*.
+ */
+function wire(c) {
+  if (!c.wire) return '';
+  const payload = JSON.stringify(c.wire.toolInput);
+  const label = c.identity === 'distinct' ? 'must not match' : 'must match';
+  return `<div class="wire"><span class="tag">${esc(c.wire.agent)} ${esc(c.wire.tool)} payload — ${esc(label)}</span>
+      <code>${esc(payload)}</code></div>`;
+}
+
 export function corpus(facts, data) {
   const byClass = new Map();
   for (const c of data.cases) {
@@ -40,7 +57,7 @@ export function corpus(facts, data) {
           ${cases
             .map(
               (c) => `<tr>
-            <td><code>${esc(c.command)}</code></td>
+            <td><code>${esc(c.command)}</code>${wire(c)}</td>
             <td>${esc(c.note)}</td>
           </tr>`,
             )
