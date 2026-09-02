@@ -334,10 +334,17 @@ describe('credentialTreeRoot names the directories a recursive read must not swe
   test('an ordinary directory, however far outside the project, is not', () => {
     // The control. Answering true everywhere would satisfy the assertion above
     // and turn every recursive search on the machine into an unlearnable ask.
+    //
+    // `/tmp` is deliberately absent from this list, and its absence is the
+    // point rather than an omission. This suite points $HOME at a throwaway
+    // directory *inside* the system temp dir, so on POSIX `/tmp` really is an
+    // ancestor of a credential store and answering true is correct. The
+    // workspace `ws()` is the honest control for "outside the project but not
+    // above anything sensitive", and it is already in the list.
     for (const p of [home('Documents'), home('code'), home('.cache'), home('.config', 'nvim'),
       ws(), ws('src'),
       '/etc/nginx', '/root/scratch', '/home/bob/code', '/usr', '/usr/share', '/var/log',
-      '/tmp', '/opt/app', 'C:/Program Files']) {
+      '/opt/app', 'C:/Program Files']) {
       assert.equal(credentialTreeRoot(p).secret, false, `${p} should not be a credential tree root`);
     }
   });

@@ -1101,7 +1101,12 @@ describe('a recursive read is judged by what it descends into', () => {
   test('the structured Grep tool descends too', () => {
     // Untrained, and on an adapter that cannot prompt this is the difference
     // between deny and abstain — no learning required to reach it.
-    for (const p of [HOME, 'C:/', '/']) {
+    // `C:/` only means a drive root on Windows. On POSIX it is a relative
+    // directory called "C:", which resolves inside the workspace and is
+    // correctly an ordinary project read — so asserting it there tested the
+    // opposite of what this is about.
+    const roots = [HOME, '/', ...(process.platform === 'win32' ? ['C:/'] : [])];
+    for (const p of roots) {
       const v = verdict(newEnvelope('project', WS), { tool: 'Grep', input: { pattern: 'x', path: p, output_mode: 'content' } });
       assert.equal(v.action.capability, 'secret.read', `Grep content over ${p} -> ${v.action.capability}`);
       assert.equal(v.floor, true, `Grep content over ${p} carried no floor`);
