@@ -207,3 +207,62 @@ describe('forgetting learned evidence actually removes it', () => {
     });
   });
 });
+
+describe('the refusal journal records refusals, not saves', () => {
+  // A save happens on every completed tool call, and every save used to append
+  // a line for every signature already carrying a refusal. Ten refusals meant
+  // ten more lines per tool call, forever, re-recording what was already there.
+  //
+  // The end of that is not a large file. `applyDenials` reads it into one
+  // string, and past Node's maximum string length that throws into a catch that
+  // returns the envelope unchanged — so the journal grows until the moment it
+  // silently stops being applied, and "a no does not expire" fails open.
+  const NIL = { reach: 'workspace', reversibility: 'easy', exposure: 'none', scale: 'single' } as const;
+
+  test('unrelated saves do not re-journal an existing refusal', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'leastgrant-denials-'));
+    const prev = process.env['LEASTGRANT_HOME'];
+    process.env['LEASTGRANT_HOME'] = dir;
+    try {
+      const { saveEnvelope, loadEnvelope } = await import('../src/store/index.js');
+      const { newEnvelope, observe } = await import('../src/core/envelope.js');
+      const journal = path.join(dir, 'denials.jsonl');
+      const lines = () =>
+        fs.existsSync(journal) ? fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean).length : 0;
+
+      const first = newEnvelope('project', 'p');
+      observe(first, {
+        signature: 'rm -rf <path>', capability: 'fs.delete', blast: NIL,
+        evidence: 'denied', at: 1_760_000_000_000, sessionId: 's', display: 'rm',
+      });
+      saveEnvelope(first);
+      assert.equal(lines(), 1);
+
+      for (let i = 0; i < 25; i++) {
+        const cur = loadEnvelope('project', 'p');
+        observe(cur, {
+          signature: 'npm test', capability: 'exec.test', blast: NIL,
+          evidence: 'confirmed', at: 1_760_000_000_000 + i, sessionId: `s${i}`, display: 'npm test',
+        });
+        saveEnvelope(cur);
+      }
+      assert.equal(lines(), 1, 'the journal grew once per save rather than once per refusal');
+
+      // And the refusal is still in force, which is the whole reason the file exists.
+      assert.ok((loadEnvelope('project', 'p').signatures['rm -rf <path>']?.denied ?? 0) > 0);
+
+      // A genuinely new refusal is still recorded.
+      const next = loadEnvelope('project', 'p');
+      observe(next, {
+        signature: 'curl <url>', capability: 'net.fetch', blast: NIL,
+        evidence: 'denied', at: 1_760_000_100_000, sessionId: 'z', display: 'curl',
+      });
+      saveEnvelope(next);
+      assert.equal(lines(), 2);
+    } finally {
+      if (prev === undefined) delete process.env['LEASTGRANT_HOME'];
+      else process.env['LEASTGRANT_HOME'] = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

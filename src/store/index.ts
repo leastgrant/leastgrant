@@ -318,10 +318,30 @@ export function saveEnvelope(env: Envelope, opts: SaveEnvelopeOptions = {}): voi
   ensureDir(path.dirname(file));
   // Re-read immediately before writing and merge, so a concurrent session's
   // evidence — in particular its denials — is not overwritten.
-  for (const [sig, stat] of Object.entries(env.signatures)) {
-    if ((stat?.denied ?? 0) > 0) recordDenial(env.scope, env.key, stat.signature || sig, stat.lastSeen ?? 0);
-  }
   const disk = loadEnvelope(env.scope, env.key);
+
+  // Journal a refusal only when this save carries one the file does not have.
+  //
+  // This used to append a record for every signature with `denied > 0`, on
+  // every save — and a save happens on every completed tool call. A project
+  // with ten refusals wrote ten more lines per tool call, forever, re-recording
+  // refusals that were already there thousands of times over. Nothing prunes
+  // the file, deliberately, because "a no does not expire".
+  //
+  // The failure at the end of that is not a large file. `applyDenials` reads it
+  // into a single string with `readFileSync`, and past Node's maximum string
+  // length that throws — into a `catch` that returns the envelope unchanged. So
+  // the journal grows until the moment it silently stops being applied, and the
+  // promise it exists to keep fails open.
+  //
+  // `disk` is loaded here anyway, so the comparison costs nothing: more
+  // refusals than the file already knows about means new information.
+  for (const [sig, stat] of Object.entries(env.signatures)) {
+    const mine = stat?.denied ?? 0;
+    if (mine <= 0) continue;
+    if (mine <= (disk.signatures[sig]?.denied ?? 0)) continue;
+    recordDenial(env.scope, env.key, stat.signature || sig, stat.lastSeen ?? 0);
+  }
   let merged = disk.events || Object.keys(disk.signatures).length ? mergeEnvelopes(disk, env) : env;
   if (opts.forget?.length) {
     const gone = new Set(opts.forget.map(safeSignatureKey));
