@@ -57,6 +57,7 @@ const COMMANDS: { name: string; args?: string; blurb: string }[] = [
   { name: 'forget', args: '<pattern>', blurb: 'remove a rule or unlearn a signature' },
   { name: 'rules', blurb: 'list the rules you have set' },
   { name: 'doctor', blurb: 'check the setup and look for over-broad access' },
+  { name: 'benchmark', blurb: 'measure how long a decision takes on this machine' },
   { name: 'install', args: '[agent]', blurb: 'install the hook for an agent' },
   { name: 'uninstall', args: '[agent]', blurb: 'remove the hook' },
   { name: 'hook', blurb: c.gray('(internal) run as an agent hook') },

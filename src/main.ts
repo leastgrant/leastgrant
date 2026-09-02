@@ -109,6 +109,10 @@ export async function main(rawArgs: string[]): Promise<number> {
         const { doctorCommand } = await import('./cli/commands/doctor.js');
         return doctorCommand(argv);
       }
+      case 'benchmark': {
+        const { benchmarkCommand } = await import('./cli/commands/benchmark.js');
+        return benchmarkCommand(argv);
+      }
       case 'install':
       case 'uninstall': {
         const { installCommand } = await import('./cli/commands/install.js');
