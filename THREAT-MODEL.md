@@ -355,10 +355,15 @@ list badly. The real categories:
   `workflows`); and a file recognised by its suffix (`*.instructions.md`,
   `*-instructions.md`, `*.prompt.md`, `*.chatmode.md`, `*.mdc`).
 
+Also on the list, and they were not until an audit checked: `build.rs` and
+`conftest.py`. The rule for membership is not "does this file run code" — plenty
+do — but "is there an approved command that will run it". `package.json` is
+floored precisely because `npm test` *is* learnable, and measurement says
+`cargo build`, `cargo test` and `pytest` are learnable too, so a poisoned
+`build.rs` was cashable end to end through an already-trusted `cargo build`.
+
 Deliberately **not** on the list: `Makefile`, `justfile`, `Taskfile.yml`,
-`noxfile.py`, `setup.py`, `build.rs`. They look like the `package.json` case — an
-edit to what a later approved command will run — but that is backwards. `package.json`
-is floored precisely because `npm test` *is* learnable; `make`, `just`, `task`, `nox`
+`noxfile.py`, `setup.py`. `make`, `just`, `task`, `nox`
 and `python setup.py` are opaque runners that stay `understood: false` and never become
 approvable however often you approve them, so a poisoned Makefile can never be cashed
 in through an already-trusted command. Flooring them would buy nothing and put a prompt

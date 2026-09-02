@@ -1229,26 +1229,59 @@ describe('the files that steer future agent sessions are guarded by shape', () =
     }
   });
 
-  test('and the build files are left out on purpose, with the measurement behind it', () => {
-    // `Makefile`, `justfile`, `Taskfile.yml`, `noxfile.py`, `setup.py` and
-    // `build.rs` look like the `package.json` case — edit what a later approved
-    // command will run — but `package.json` is floored precisely because
-    // `npm test` IS approvable. These runners are opaque and never become
-    // approvable, so poisoning their config buys nothing cashable, and flooring
-    // them would put a prompt on a very common edit.
+  test('a build file is floored exactly when something can cash it in', () => {
+    // The membership rule, asserted as a rule rather than as a list.
     //
-    // If this ever flips, the trade-off changes and the files should be added.
-    for (const command of ['make build', 'just build', 'task build', 'nox -s tests', 'python setup.py sdist']) {
-      const env = trainedOn([command]);
-      assert.notEqual(
-        verdict(env, { tool: 'Bash', input: { command } }).decision,
+    // `package.json` is floored because `npm test` IS approvable: once it is,
+    // editing the scripts block edits what an approved command runs. The same
+    // test decides every other build file, and it turns on one measurable
+    // fact — is the runner understood, and therefore learnable?
+    //
+    // This was one list asserting that Makefile, justfile, Taskfile, noxfile,
+    // setup.py, conftest.py and build.rs were all left out together, because
+    // their runners never become approvable. True of the first five. Never true
+    // of the last two: `cargo build`, `cargo test` and `pytest` are all
+    // understood. So a poisoned build.rs was cashable end to end through an
+    // approved `cargo build`, and the comment here promised to revisit "if this
+    // ever flips" — about something that had not flipped, because it had never
+    // been checked.
+    const CASHABLE = [
+      { runner: 'cargo build', file: 'build.rs' },
+      { runner: 'pytest', file: 'conftest.py' },
+      { runner: 'npm test', file: 'package.json' },
+    ];
+    const OPAQUE = [
+      { runner: 'make build', file: 'Makefile' },
+      { runner: 'just build', file: 'justfile' },
+      { runner: 'task build', file: 'Taskfile.yml' },
+      { runner: 'nox -s tests', file: 'noxfile.py' },
+      { runner: 'python setup.py sdist', file: 'setup.py' },
+    ];
+
+    for (const { runner, file } of CASHABLE) {
+      assert.equal(
+        verdict(trainedOn([runner]), { tool: 'Bash', input: { command: runner } }).decision,
         'allow',
-        `${command} became approvable — the file it reads should now be a control file`,
+        `${runner} is no longer approvable — ${file} may not need to be a control file`,
+      );
+      assert.notEqual(
+        writeVerdict(trainedOnSourceWrites(), file).decision,
+        'allow',
+        `${file} is freely writable while ${runner} is approvable, so the edit is cashable`,
       );
     }
-    const env = trainedOnSourceWrites();
-    for (const rel of ['Makefile', 'justfile', 'Taskfile.yml', 'conftest.py', 'noxfile.py', 'setup.py', 'build.rs']) {
-      assert.equal(writeVerdict(env, rel).decision, 'allow', `${rel} is floored but nothing cashes it in`);
+
+    for (const { runner, file } of OPAQUE) {
+      assert.notEqual(
+        verdict(trainedOn([runner]), { tool: 'Bash', input: { command: runner } }).decision,
+        'allow',
+        `${runner} became approvable — ${file} should now be a control file`,
+      );
+      assert.equal(
+        writeVerdict(trainedOnSourceWrites(), file).decision,
+        'allow',
+        `${file} is floored but nothing can cash it in, which is a prompt on a common edit`,
+      );
     }
   });
 });

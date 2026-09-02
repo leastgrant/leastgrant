@@ -112,6 +112,20 @@ const CONTROL_FILES = [
   // package.json carries the scripts that `npm test` and friends run, so an
   // edit here is an edit to what a later approved command will execute.
   'package.json',
+  // The same rule, applied consistently. The test that decides membership here
+  // is not "does this file run code" — plenty do — but "is there an approved
+  // command that will run it". `npm test`, `cargo build`, `cargo test` and
+  // `pytest` are all understood, so all four are learnable, so all four can
+  // cash in an edit to the file they execute.
+  //
+  // THREAT-MODEL.md used to list build.rs and conftest.py under "deliberately
+  // not on the list", on the grounds that their runners stay understood:false
+  // and can never be approved. That is true of `make`, `just`, `task`, `nox`
+  // and `python setup.py`, which is where the reasoning came from, and it is
+  // false of cargo and pytest — measured, not assumed. So a poisoned build.rs
+  // was cashable end to end through an already-approved `cargo build`.
+  'build.rs',
+  'conftest.py',
   '.aider.conf.yml',
   '.claude/settings.json',
   '.claude/settings.local.json',
