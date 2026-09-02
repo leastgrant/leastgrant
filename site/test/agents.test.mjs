@@ -225,6 +225,48 @@ describe('the public status label is derived, not written', () => {
     }
   });
 
+  test('the home page pips mean what the records say', () => {
+    // The failure this exists for is the quietest kind there is. The home page
+    // coloured each agent by matching the README's status words with a regex —
+    // `/^Enforcing, tested/`, `/^Enforcing/` — and when those words changed,
+    // every match failed and every agent fell through to the worst level. Five
+    // green pips went grey. Nothing caught it: the tests compared the README's
+    // words to the site's words, and the two still agreed perfectly.
+    //
+    // So this asserts the derivation, not the markup. A pip is a claim about an
+    // agent and has to be checked as one.
+    const home = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+    const pips = [...home.matchAll(/data-level="([a-z]+)"[^>]*><\/span>([^<]+)</g)].map((m) => ({
+      level: m[1],
+      agent: m[2].trim(),
+    }));
+    assert.ok(pips.length >= 4, `only ${pips.length} agent pips on the home page`);
+
+    for (const a of records.filter((x) => x.adapter)) {
+      const pip = pips.find((p) => p.agent === a.name);
+      assert.ok(pip, `${a.name} has no pip on the home page`);
+      const grade = deriveVerification(a);
+      const want = grade === 'LIVE VERIFIED' ? 'verified' : grade === 'UNVERIFIED' ? 'none' : 'unverified';
+      assert.equal(
+        pip.level,
+        want,
+        `${a.name} is ${grade} and its pip says "${pip.level}" — expected "${want}"`,
+      );
+    }
+
+    // And the whole set is not one value. Every regression of this shape ends
+    // with all of them equal, because the derivation stopped discriminating
+    // rather than producing a wrong answer for one agent.
+    const distinct = new Set(records.filter((x) => x.adapter).map(deriveVerification));
+    if (distinct.size > 1) {
+      assert.ok(
+        new Set(pips.map((p) => p.level)).size > 1,
+        `the records hold ${distinct.size} different grades and every pip renders the same level — ` +
+          `the derivation has stopped discriminating`,
+      );
+    }
+  });
+
   test('an agent with no adapter is never shown as verified', () => {
     for (const a of records.filter((x) => !x.adapter)) {
       assert.equal(deriveVerification(a), 'UNVERIFIED', `${a.id} has no adapter but is not UNVERIFIED`);

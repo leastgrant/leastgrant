@@ -15,6 +15,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { REPO } from './capture.mjs';
+import {
+  loadCompatibility,
+  assess,
+  deriveVerification,
+  LEVEL_LABEL,
+} from '../../dist/src/core/compatibility.js';
 
 const read = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
 
@@ -186,23 +192,61 @@ function tableUnder(markdown, heading, { skipHeader = true } = {}) {
 }
 
 function parseAgentTable(readme) {
-  const rows = tableUnder(readme, '## Agent support');
-  return rows
-    .filter((r) => r.length >= 3 && r[0] && !/^Agent$/i.test(r[0]))
-    .map(([agent, status, how]) => ({
-      agent: agent.replace(/\*\*/g, ''),
-      status,
-      how,
-      // Three states, taken from the words rather than assumed. Anything the
-      // README hedges about stays hedged here.
-      level: /^Enforcing, tested/i.test(status)
-        ? 'verified'
-        : /^Enforcing/i.test(status)
-          ? 'unverified'
-          : /Installer only/i.test(status)
-            ? 'unverified'
-            : 'none',
-    }));
+  // Read from the compatibility records, not from the README's rendering of
+  // them. This function used to parse that table and infer a level by matching
+  // the status words — `/^Enforcing, tested/`, `/^Enforcing/`, `/Installer
+  // only/` — and when the status words changed, every one of those stopped
+  // matching and every agent on the home page fell through to the worst
+  // level. Five green pips went grey and no test noticed, because the tests
+  // compared the README's words to the site's words and the two still agreed.
+  //
+  // Deriving from the same records `doctor` reads removes the inference. The
+  // README is still checked below, but as a cross-check rather than as the
+  // source: if the generated table and these records ever disagree about an
+  // agent, that is a build failure and not a quiet downgrade.
+  const records = loadCompatibility();
+  if (!records.length) throw new Error('no compatibility records — the agent facts cannot be built');
+
+  const shipped = records.filter((a) => a.adapter);
+  const agents = shipped.map((a) => {
+    const level = assess(a).level;
+    return {
+      agent: a.name,
+      status: LEVEL_LABEL[level] ?? level,
+      how: deriveVerification(a),
+      // Green only when something has actually been run inside the real agent.
+      // Amber when the contract or the transport has been established and the
+      // agent itself has not. Grey is for an integration nothing supports.
+      level:
+        deriveVerification(a) === 'LIVE VERIFIED'
+          ? 'verified'
+          : deriveVerification(a) === 'UNVERIFIED'
+            ? 'none'
+            : 'unverified',
+    };
+  });
+
+  // The cross-check. The README block is generated from these same records, so
+  // a disagreement means one of the two generators has drifted.
+  const rows = tableUnder(readme, '## Agent support').filter(
+    (r) => r.length >= 3 && r[0] && !/^Agent$/i.test(r[0]),
+  );
+  for (const { agent, status, how } of agents) {
+    const row = rows.find((r) => r[0].replace(/\*\*/g, '') === agent);
+    if (!row) {
+      throw new Error(
+        `README.md's agent table has no row for ${agent}, which compatibility/ says ships an ` +
+          `adapter. Run: npm run gen:readme`,
+      );
+    }
+    if (row[1] !== status || row[2] !== how) {
+      throw new Error(
+        `README.md says ${agent} is "${row[1]} / ${row[2]}" and the compatibility record derives ` +
+          `"${status} / ${how}". Run: npm run gen:readme`,
+      );
+    }
+  }
+  return agents;
 }
 
 function parseOrderTable(readme) {
