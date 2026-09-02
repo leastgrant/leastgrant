@@ -133,11 +133,35 @@ Claims in our docs that upstream evidence contradicts (must fix before release):
 - 9775261 website /compatibility page + site tests; facts.mjs now reads the corpus
 1365 core + 205 site tests green at 9775261.
 
+## LANDED (quota-reset session)
+- dec7fe7 merge guards-secrets fix (findings 12/15/16). I re-verified all three
+  myself: `grep -r ~` now secret.read+sweeping, scoped searches unaffected,
+  SECURITY.md is NOT a credential, ~/Documents is NOT a credential tree,
+  agent-instruction files guarded with no false positives on src/README/Makefile.
+- 3b7f86c /Users/alice -> /Users/you (the site's own leak check refused to
+  publish a page containing what looks like a real home directory).
+- **AGGREGATION FOLD** - taint per action + floor from `floored` not `hits` +
+  total election order + new `Verdict.flooredGuards`. Closes the two bugs the
+  invariant workflow confirmed. 1456 tests, both folds mutation-tested.
+  NOTE FOR CODEX WORK: codex/hook.ts still classifies floors by scanning reason
+  codes for a `guard.` prefix. It should read `flooredGuards` instead. The data
+  is there now; the adapter migration was left to the in-flight cluster.
+
 ## IN FLIGHT
-- wf_5dea6e16-9ef fix campaign, 5 clusters in worktrees (shell-unwrap,
-  paths-floor, session-race, codex-wire, guards-secrets) + verifiers
-- wf_900d6002-1ad Cursor live verification + adapter/claims correction
-- wf_524764a6-4c9 Antigravity spike (assess -> build if it clears the bar)
+- wf_de8f9282-668 **criticals campaign** (relaunched after the quota reset
+  killed the first attempt): shell-unwrap, paths-floor, session-race,
+  codex-wire, each in a worktree, each with an independent verifier.
+  These hold 5 of the 6 criticals. guards-secrets already landed.
+
+## DEAD / SUPERSEDED
+- wf_5dea6e16-9ef: 4 of 5 clusters died on the 429 budget wall. Only
+  guards-secrets finished; landed as dec7fe7. Relaunched as wf_de8f9282-668.
+- wf_900d6002-1ad Cursor: 4/6 agents finished, findings captured in
+  .sprint/upstream-contracts.json. The fix+verify agents died. Cursor claim
+  corrections are STILL TO DO.
+- wf_524764a6-4c9 Antigravity: died before assessing. Antigravity 2.11.0 IS
+  installed and has force_ask; spike not yet done.
+- wf_8525a5f1-588 attack wave 2: all 8 agents died on budget. Not re-run.
 
 ## DECIDED
 - OpenCode: DEFER, well-evidenced. permission.ask is in the types and never
