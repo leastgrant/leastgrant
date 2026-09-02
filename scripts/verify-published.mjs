@@ -56,6 +56,9 @@ function registryBase() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Set once an attestation is actually observed, not merely expected. */
+let sawAttestation = false;
+
 /**
  * Ask npm whether the published version carries a verified attestation.
  *
@@ -105,6 +108,7 @@ function checkProvenance(spec, advisory, quiet = false) {
       );
     }
     if (/verified attestation/i.test(out)) {
+      sawAttestation = true;
       console.log('  ok    provenance attestation verified');
       return 0;
     }
@@ -252,7 +256,9 @@ async function main() {
   // --- provenance ---------------------------------------------------------------
 
   if (expectProvenance || advisoryProvenance) {
-    problems += await checkProvenanceWithRetry(spec, advisoryProvenance);
+    const provenanceResult = await checkProvenanceWithRetry(spec, advisoryProvenance);
+    problems += provenanceResult;
+    report(sawAttestation);
   }
 
   if (problems) {
@@ -261,6 +267,21 @@ async function main() {
   }
   console.log(`\n${spec} verified on the registry`);
   return 0;
+}
+
+/**
+ * Report what was actually observed, for whoever writes the release notes.
+ *
+ * The notes used to infer provenance from "did this run publish it?", which is
+ * not the same question. Re-running a release after a successful publish — the
+ * documented recovery path — makes that inference wrong: the version was
+ * published by the workflow, with an attestation, and the second run described
+ * it on the public release page as hand-published without one.
+ */
+function report(hasProvenance) {
+  const out = process.env['GITHUB_OUTPUT'];
+  if (!out) return;
+  fs.appendFileSync(out, `has_provenance=${hasProvenance ? 'true' : 'false'}\n`);
 }
 
 // `exitCode`, not `exit()`: see the note at the top of this file.

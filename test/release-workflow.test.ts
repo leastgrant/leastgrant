@@ -340,25 +340,42 @@ describe('re-running cannot produce a half-release', () => {
     );
   });
 
-  test('the notes do not claim provenance for a version this run did not publish', () => {
+  test('the notes describe what the registry shows, not what the run assumes', () => {
+    // The first version of this branched on `already_published`, which answers
+    // "did this run publish it" — a different question from "does it have
+    // provenance". Re-running a release after a successful publish is the
+    // documented recovery path, and the re-run then described a workflow
+    // publish, attestation and all, as a hand publish without one.
+    const rel = jobBlock(uncommented(RELEASE), 'release');
+    assert.match(rel, /HAS_PROVENANCE: \$\{\{ needs\.publish\.outputs\.has_provenance \}\}/);
+    assert.match(rel, /if \[ "\$HAS_PROVENANCE" = 'true' \]/);
+
+    const publish = jobBlock(uncommented(RELEASE), 'publish');
+    assert.match(
+      publish,
+      /has_provenance: \$\{\{ steps\.proof\.outputs\.has_provenance \}\}/,
+      'the publish job must expose what the proof step observed',
+    );
+  });
+
+  test('the provenance claim still sits inside a branch', () => {
     // The first release of any package is a hand publish -- a trusted publisher
     // cannot be configured until the package exists -- so it has no attestation.
     // Printing the usual sentence anyway would point readers at a check that
     // fails on a healthy package.
     const rel = jobBlock(uncommented(RELEASE), 'release');
-    assert.match(rel, /ALREADY: \$\{\{ needs\.publish\.outputs\.already_published \}\}/);
 
     const lines = rel.split('\n');
     const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
-    const branch = at(/if \[ "\$ALREADY" = 'true' \]/);
-    const otherwise = at(/^\s*else\s*$/);
-    const end = lines.findIndex((l, i) => i > otherwise && /^\s*fi\s*$/.test(l));
+    const branch = at(/if \[ "\$HAS_PROVENANCE" = 'true' \]/);
+    const otherwise = lines.findIndex((l, i) => i > branch && /^\s*else\s*$/.test(l));
     const claim = at(/Published to npm from .*with provenance/);
 
-    assert.ok(branch >= 0, 'the notes should branch on whether this run published');
+    assert.ok(branch >= 0, 'the notes should branch on the observed attestation');
+    assert.ok(otherwise > branch, 'the branch has no alternative');
     assert.ok(
-      claim > otherwise && claim < end,
-      'the provenance claim belongs in the else branch, where this run did the publishing',
+      claim > branch && claim < otherwise,
+      'the provenance claim belongs in the branch taken when an attestation was actually found',
     );
     assert.equal(
       lines.filter((l) => /with provenance/.test(l)).length,

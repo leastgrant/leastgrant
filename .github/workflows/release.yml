@@ -138,6 +138,10 @@ jobs:
       integrity: ${{ steps.artifact.outputs.integrity }}
       sha256: ${{ steps.artifact.outputs.sha256 }}
       already_published: ${{ steps.exists.outputs.already_published }}
+      # What the registry actually shows, not what this run assumes. A re-run
+      # of a successful release sees already_published=true and would otherwise
+      # describe a workflow publish as a hand publish on the public notes.
+      has_provenance: ${{ steps.proof.outputs.has_provenance }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -263,6 +267,7 @@ jobs:
       # Whether we just published it or found it already there, the registry
       # must now hold the bytes this job verified, with provenance.
       - name: Prove the registry holds what was verified
+        id: proof
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           INTEGRITY: ${{ steps.artifact.outputs.integrity }}
@@ -353,6 +358,7 @@ jobs:
           SHA256: ${{ needs.publish.outputs.sha256 }}
           INTEGRITY: ${{ needs.publish.outputs.integrity }}
           ALREADY: ${{ needs.publish.outputs.already_published }}
+          HAS_PROVENANCE: ${{ needs.publish.outputs.has_provenance }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           {
@@ -368,12 +374,19 @@ jobs:
             # readers to `npm audit signatures` expecting an attestation that is
             # not there, and a failed check on a healthy package teaches people
             # to ignore the check.
-            if [ "$ALREADY" = 'true' ]; then
+            # Branch on what the registry SHOWS, not on whether this particular
+            # run did the publishing. Those are different questions, and the
+            # difference bit: re-running a release after a successful publish is
+            # the documented recovery path, and the re-run saw
+            # already_published=true and described a workflow publish, with a
+            # valid attestation, as a hand publish without one — on the public
+            # release page.
+            if [ "$HAS_PROVENANCE" = 'true' ]; then
+              echo "Published to npm from \`.github/workflows/release.yml\` with provenance."
+            else
               echo "Published to npm by hand, before a trusted publisher existed for this"
               echo "package, so this version carries no provenance attestation. Later"
               echo "releases are published by \`.github/workflows/release.yml\` and do."
-            else
-              echo "Published to npm from \`.github/workflows/release.yml\` with provenance."
             fi
             echo ''
             echo "Either way the bytes on the registry were checked, after the fact,"
@@ -381,7 +394,7 @@ jobs:
             echo ''
             echo "\`\`\`"
             echo "npm view $PACKAGE_NAME@$VERSION dist.integrity   # $INTEGRITY"
-            if [ "$ALREADY" != 'true' ]; then
+            if [ "$HAS_PROVENANCE" = 'true' ]; then
               echo "npm audit signatures"
             fi
             echo "\`\`\`"
