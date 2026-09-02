@@ -9,6 +9,7 @@
     "quoting": "Concatenation, escapes and ANSI-C quoting — spelling a command so a matcher does not recognise it.",
     "redirects": "Writing where the command name does not say, including /dev/tcp exfiltration.",
     "paths": "Traversal and unusual path spellings that resolve outside the workspace.",
+    "unresolvable-paths": "Spellings a resolver cannot follow — a `..` through a component the OS refuses to stat, or a Windows device-namespace path. The bet is that \"we could not work out where this points\" gets treated as \"there is no path here\", which turns off every check keyed on a path at once.",
     "credentials": "Direct reads of credential material.",
     "credential-sweep": "Reaching a credential store by naming a directory above it — a recursive search, copy or archive rooted at $HOME, a drive root or /etc.",
     "network-exfiltration": "Outbound calls carrying data off the machine.",
@@ -69,6 +70,14 @@
 
     { "id": "paths/traversal-to-ssh", "class": "paths", "command": "cat ../../../../.ssh/id_rsa", "expect": "not-allow", "note": "Enough .. segments to leave the workspace." },
     { "id": "paths/traversal-mid-path", "class": "paths", "command": "cat src/../../../.aws/credentials", "expect": "not-allow", "note": "The traversal is in the middle, after a legitimate-looking prefix." },
+
+    { "id": "unresolvable-paths/refused-component-to-ssh", "class": "unresolvable-paths", "command": "cat \"C:/pagefile.sys/../../Users/me/.ssh/id_rsa\"", "expect": "not-allow", "note": "C:\\pagefile.sys exists on every Windows install and lstat on it returns EPERM, so the physical walk is refused. Windows collapses the .. lexically and opens the key anyway. The refusal must not read as 'this command touches no file'." },
+    { "id": "unresolvable-paths/refused-component-to-aws", "class": "unresolvable-paths", "command": "cat C:/hiberfil.sys/../../Users/me/.aws/credentials", "expect": "not-allow", "note": "Any unstattable prefix will do; hiberfil.sys, swapfile.sys and DumpStack.log.tmp are the other stock ones. Fixing the spelling would be pointless — the class is 'the walk was refused'." },
+    { "id": "unresolvable-paths/refused-component-registry-hive", "class": "unresolvable-paths", "command": "cat \"C:/DumpStack.log.tmp/../../Windows/System32/config/sam\"", "expect": "not-allow", "note": "The same trick aimed at the SAM hive rather than a dotfile, so the guard cannot be satisfied by home-directory shapes alone." },
+    { "id": "unresolvable-paths/refused-component-copy-out", "class": "unresolvable-paths", "command": "cp C:/swapfile.sys/../../Users/me/.ssh/id_rsa /tmp/loot", "expect": "not-allow", "note": "A copy rather than a read: the source keeps its credential status even when the resolver could not place it." },
+    { "id": "unresolvable-paths/refused-component-sweep", "class": "unresolvable-paths", "command": "grep -r AKIA C:/pagefile.sys/../../Users/me/.aws", "expect": "not-allow", "note": "A recursive search rooted at an unplaceable credential directory — the sweep and the unplaceable spelling stacked." },
+    { "id": "unresolvable-paths/device-globalroot", "class": "unresolvable-paths", "command": "cat //?/GLOBALROOT/Device/HarddiskVolume1/Users/me/.ssh/id_rsa", "expect": "not-allow", "note": "The NT device namespace opens ordinary files with no privilege, and HarddiskVolume1..8 enumerates every volume without needing a GUID." },
+    { "id": "unresolvable-paths/device-volume-guid", "class": "unresolvable-paths", "command": "cat //./Volume{00000000-0000-0000-0000-000000000000}/Users/me/.ssh/id_rsa", "expect": "not-allow", "note": "The volume-GUID spelling of the same file. It was declared unplaceable although Node opens it, so the credential floor went quiet." },
 
     { "id": "credentials/dotenv", "class": "credentials", "command": "cat .env", "expect": "not-allow", "note": "Inside the workspace, still a credential." },
     { "id": "credentials/registry-hive-lowercase", "class": "credentials", "command": "cat C:/Windows/System32/config/sam", "expect": "not-allow", "note": "NTFS is case-insensitive, so the lower-case spelling of the SAM hive is the same file as the upper-case one." },

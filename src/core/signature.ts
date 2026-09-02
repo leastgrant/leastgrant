@@ -23,6 +23,7 @@
 
 import { UNRESOLVED } from './shell/tokenize.js';
 import { credentialTreeRoot } from './secrets.js';
+import { isUnplaceable } from './paths.js';
 
 export interface SignatureCtx {
   resolve(arg: string): string;
@@ -65,7 +66,23 @@ export function normalizeArg(arg: string, ctx: SignatureCtx): string {
   if (ctx.looksLikePath(arg)) {
     const abs = ctx.resolve(arg);
     if (!abs) return '<path:unresolved>';
+    // A credential is a credential under every spelling. This is tested before
+    // the unplaceable branch on purpose: `cat <marked ~/.ssh/id_rsa>` names the
+    // same key as `cat ~/.ssh/id_rsa` and must share its identity, which is
+    // floored forever, rather than getting a token of its own.
     if (ctx.isSecret(abs)) return '<path:secret>';
+    // Anything else we could not place gets one token that no resolvable path
+    // ever shares. `outsideZone` below reads a *region* out of the path text,
+    // and the text of an unplaceable path is exactly as readable as any other —
+    // so `cat C:\pagefile.sys\..\..\Users\me\.ssh\id_rsa` came out as
+    // `cat <path:outside:home>`, byte-identical to `cat ~/Documents/notes.txt`.
+    // Twenty approvals of the notes file then bought the key.
+    //
+    // The token is safe to share across every unplaceable path because it is
+    // never promotable: an action holding one is not understood, and
+    // `guard.not-understood` returns from `decideOne` before any evidence is
+    // weighed.
+    if (isUnplaceable(abs)) return '<path:unresolved>';
     if (!ctx.inWorkspace(abs)) return '<path:outside:' + outsideZone(abs) + '>';
     return '<path>';
   }

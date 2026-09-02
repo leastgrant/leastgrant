@@ -150,7 +150,21 @@ describe('the corpus itself is well-formed', () => {
 });
 
 describe('bypass corpus is never auto-approved', () => {
-  const ctx = trainedOn(['git status', 'npm test', 'ls -la', 'echo hello', 'cat README.md', 'diff a b', 'git log']);
+  // The training set is the attacker's best case, so it has to include the
+  // *innocuous neighbour* of every attack class — the ordinary habit whose
+  // learned identity the attack is trying to spend. Without one, a case can
+  // pass for the wrong reason: it is merely unfamiliar, and the corpus proves
+  // nothing about whether the floor works.
+  //
+  // `cat ~/Documents/notes.txt` earned its place that way. Every
+  // `unresolvable-paths` case signed as `cat <path:outside:home>` before those
+  // were fixed — the identical signature to this read — so all seven passed
+  // against the unfixed engine on novelty alone. With this line they fail
+  // against it, which is what a regression corpus is for.
+  const ctx = trainedOn([
+    'git status', 'npm test', 'ls -la', 'echo hello', 'cat README.md', 'diff a b', 'git log',
+    'cat ~/Documents/notes.txt',
+  ]);
 
   for (const b of CORPUS.cases) {
     test(b.id, () => {
