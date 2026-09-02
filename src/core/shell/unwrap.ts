@@ -186,7 +186,10 @@ const VALUE_FLAGS: Record<string, Set<string>> = {
   // `/usr/bin/time -f "%e" cmd` — without this, the format string is mistaken
   // for the program and every timed command gets its own junk signature.
   time: new Set(['-f', '--format', '-o', '--output', '-a', '--append']),
-  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']),
+  // `-S`/`--split-string` is deliberately absent: it does not carry a *value*,
+  // it carries a *command*. Listing it here made stripFlags eat the flag and
+  // the whole payload — see the ENV_WRAPPERS branch below.
+  env: new Set(['-u', '--unset', '-C', '--chdir']),
   stdbuf: new Set(['-i', '-o', '-e', '--input', '--output', '--error']),
   nice: new Set(['-n', '--adjustment']),
   ionice: new Set(['-c', '-n', '-p']),
@@ -213,10 +216,25 @@ export function unwrap(
   const wrapperPaths: string[] = [];
   let current = cmd;
 
+  /**
+   * A command with no program at all: `PATH=/tmp/evil`, or `X=1 > ~/.bashrc`.
+   *
+   * Nothing is *hidden* here — no program runs — but something still happens,
+   * so it is judged like any other command. What must not happen is the
+   * "we could not read the program name" opacity at the bottom of this
+   * function firing on it: that unknown is about not knowing what runs, and
+   * here we know exactly that nothing does. Letting it fire would make every
+   * `FOO=bar` in an ordinary script permanently unlearnable.
+   */
+  const assignmentOnly = !cmd.name && !cmd.argv.length && cmd.assignments.length > 0;
+
   const push = (name: string, tag: WrapperTag, note: string) => {
     wrappers.push({ name, tag, note });
     if (!notes.includes(note)) notes.push(note);
   };
+
+  /** Everything this wrapper knows that the payload must inherit. */
+  const carried = (): PayloadContext => ({ wrapperPaths, argsUnknown });
 
   for (let guard = 0; guard < 12; guard++) {
     const name = baseName(current.name);
@@ -246,7 +264,7 @@ export function unwrap(
       if (name === 'su' || name === 'sudo') {
         const ci = rest.indexOf('-c');
         if (ci !== -1 && rest[ci + 1] !== undefined) {
-          return intoShellString(rest[ci + 1]!, wrappers, notes, opts, depth, current, opaque);
+          return intoShellString(rest[ci + 1]!, wrappers, notes, opts, depth, current, opaque, carried());
         }
       }
       if (!rest.length) {
@@ -261,6 +279,21 @@ export function unwrap(
     if (ENV_WRAPPERS.has(name)) {
       let rest = argv.slice(1);
       if (name === 'env') {
+        // `env -S 'STRING'` splits STRING into a program and arguments and
+        // execs it. It is an execution wrapper exactly like `sh -c`, and it was
+        // being read as an ordinary flag-with-a-value: `-S` was in VALUE_FLAGS,
+        // so stripFlags consumed the flag *and the entire payload*, `rest` came
+        // out empty, and the loop broke at `if (!rest.length)` before any
+        // wrapper layer was pushed. Every payload then classified as a bare,
+        // fully-understood `env` whose single whitespace-bearing argument
+        // templated down to `<text>` — so `env -S "npm run build"` and
+        // `env -S "sudo systemctl enable backdoor"` were one learnable
+        // signature, and habituating the first auto-approved the second.
+        const split = splitStringPayload(argv);
+        if (split !== undefined) {
+          push('env -S', 'shell-eval', 'runs a command string that env splits into a program and arguments');
+          return intoShellString(split, wrappers, notes, opts, depth, current, opaque, carried());
+        }
         rest = stripFlags(rest, VALUE_FLAGS['env']);
         // `env FOO=bar cmd` is `FOO=bar cmd`. These used to be dropped on the
         // floor, and that was a complete bypass of the assignment floor: the
@@ -367,7 +400,7 @@ export function unwrap(
       const ci = argv.findIndex((a, k) => k > 0 && (a === '-c' || a === '-lc' || a === '-ic'));
       if (ci !== -1 && argv[ci + 1] !== undefined) {
         push(name, 'shell-eval', `runs a shell command string via ${name} -c`);
-        return intoShellString(argv[ci + 1]!, wrappers, notes, opts, depth, current, opaque);
+        return intoShellString(argv[ci + 1]!, wrappers, notes, opts, depth, current, opaque, carried());
       }
       // `bash script.sh` — a file whose contents we have not read.
       const script = argv.slice(1).find((a) => !a.startsWith('-'));
@@ -394,7 +427,7 @@ export function unwrap(
       // `trap - EXIT` and `trap '' EXIT` remove or ignore a handler: no code.
       if (code === undefined || code === '-' || code === '') break;
       push('trap', 'deferred', 'schedules code to run later, when the shell exits or a signal arrives');
-      return intoShellString(code, wrappers, notes, opts, depth, current, opaque);
+      return intoShellString(code, wrappers, notes, opts, depth, current, opaque, carried());
     }
 
     if (name === 'eval') {
@@ -453,7 +486,7 @@ export function unwrap(
       const remote = rest.slice(1);
       push('ssh', 'remote', `runs a command on ${host}`);
       if (remote.length) {
-        return intoShellString(remote.join(' '), wrappers, notes, opts, depth, current, opaque);
+        return intoShellString(remote.join(' '), wrappers, notes, opts, depth, current, opaque, carried());
       }
       // A host with no command is an interactive session: anything could happen.
       wrappers[wrappers.length - 1]!.note = `opens an interactive shell on ${host}`;
@@ -569,7 +602,11 @@ export function unwrap(
   // That includes a name still carrying shell metacharacters: `rm{,}` expands
   // to `rm`, `r*` may expand to anything on disk. The word we are holding is
   // not the program that runs, so we do not know what does.
-  if (!current.name || current.name.includes(UNRESOLVED)) {
+  if (assignmentOnly) {
+    // Nothing to say about a program that does not exist. The assignment itself
+    // is judged by the classifier, and any redirect it carries is resolved
+    // there like any other.
+  } else if (!current.name || current.name.includes(UNRESOLVED)) {
     opaque = true;
     notes.push('the program that would run is decided at runtime');
   } else if (!SHELL_TEST_BUILTINS.has(current.name) && /[{}*?[\]]/.test(current.name)) {
@@ -591,7 +628,32 @@ export function unwrap(
   return { command: current, wrappers, opaque, argsUnknown, notes, ...(wrapperPaths.length ? { wrapperPaths } : {}) };
 }
 
-/** Parse an embedded shell string and return its most significant command. */
+/**
+ * What a wrapper knows that the code it is about to run must inherit.
+ *
+ * A payload reached through `-c` is not a fresh command line: it runs under
+ * everything the wrapper established. Leaving any of it behind is how
+ * `find <key> -exec sh -c "cat {}" ;` came out as a bare `cat` with no target,
+ * no exposure, no floor — the tree `find` walks belonged to the wrapper, and
+ * the wrapper was thrown away on the way in.
+ */
+interface PayloadContext {
+  /** Paths the wrapper named, which the payload will act on. */
+  wrapperPaths?: string[];
+  /** The wrapper already told us the arguments are not knowable (`{}`, xargs). */
+  argsUnknown?: boolean;
+}
+
+/**
+ * Parse an embedded shell string and return everything it runs.
+ *
+ * The head comes back as the returned command and the rest as `siblings`, but
+ * the important word is *everything*: the payload goes through exactly the same
+ * expansion as top-level text, and every command in it inherits the wrapper's
+ * context. This function used to build its own tail from `inner.commands`
+ * alone, so a payload whose head was itself a wrapper — a nested `-c`, a
+ * `trap`, an `ssh host 'a; b'` — silently lost everything that head had found.
+ */
 function intoShellString(
   code: string,
   wrappers: WrapperLayer[],
@@ -606,7 +668,10 @@ function intoShellString(
    * `BASH_ENV=/tmp/evil.sh bash -c "git status"` be judged as `git status`.
    */
   outerOpaque = false,
+  carry: PayloadContext = {},
 ): EffectiveCommand {
+  const carriedPaths = carry.wrapperPaths ?? [];
+  const asPaths = carriedPaths.length ? { wrapperPaths: [...carriedPaths] } : {};
   if (depth >= 4 || code.includes(UNRESOLVED)) {
     return {
       command: fallback,
@@ -614,18 +679,17 @@ function intoShellString(
       opaque: true,
       argsUnknown: true,
       notes: [...notes, 'the embedded command string could not be resolved'],
+      ...asPaths,
     };
   }
   const inner = parseShell(code, opts);
-  const first = inner.commands[0];
-  if (!first) {
-    return { command: fallback, wrappers, opaque: true, argsUnknown: true, notes };
+  // The same expansion the top level gets, recursively — not a hand-rolled
+  // walk that has to remember to merge what the recursion found.
+  const all = expandAll(inner.commands, opts, depth + 1);
+  if (!all.length) {
+    return { command: fallback, wrappers, opaque: true, argsUnknown: true, notes, ...asPaths };
   }
-  const sub = unwrap(first, opts, depth + 1);
-  const siblings = inner.commands
-    .slice(1)
-    .filter((c) => c.name)
-    .map((c) => unwrap(c, opts, depth + 1));
+
   // Carry the outer command's assignments onto the payload.
   //
   // `BASH_ENV=/tmp/evil sh -c ls` peels to a freshly parsed `ls`, which of
@@ -637,19 +701,44 @@ function intoShellString(
   //
   // Attaching them to the inner command puts them back in the signature, so the
   // dressed-up form is a different learned thing whatever posture is in force.
-  const carried = fallback.assignments ?? [];
-  const command =
-    carried.length && sub.command !== fallback
-      ? { ...sub.command, assignments: [...carried, ...sub.command.assignments] }
-      : sub.command;
-  return {
-    command,
-    wrappers: [...wrappers, ...sub.wrappers],
-    opaque: outerOpaque || !inner.ok || sub.opaque,
-    argsUnknown: sub.argsUnknown,
-    notes: [...notes, ...sub.notes],
-    ...(siblings.length ? { siblings } : {}),
+  const assignments = fallback.assignments ?? [];
+
+  // Where the wrapper sat in the shell structure is where its payload sits: a
+  // `bash -c` inside a loop runs its payload once per iteration, and one inside
+  // `$( )` runs it in a substitution. `pipe` is the exception — only the head
+  // of the payload reads the wrapper's stdin — and it is the one that matters
+  // most, because `curl x | bash -c sh` is a pipe-to-shell.
+  const inherited = fallback.contexts.filter((c) => c !== 'pipe');
+  const pipedIn = fallback.contexts.includes('pipe');
+
+  const dress = (e: EffectiveCommand, head: boolean): EffectiveCommand => {
+    const contexts = [...e.command.contexts];
+    for (const c of inherited) if (!contexts.includes(c)) contexts.push(c);
+    if (head && pipedIn && !contexts.includes('pipe')) contexts.push('pipe');
+    const paths = [...carriedPaths, ...(e.wrapperPaths ?? [])];
+    return {
+      command: {
+        ...e.command,
+        contexts,
+        assignments: assignments.length
+          ? [...assignments, ...e.command.assignments]
+          : e.command.assignments,
+      },
+      wrappers: [...wrappers, ...e.wrappers],
+      // Every one of these applies to the whole payload, not just its head.
+      // `sudo sh -c "ls; rm -rf /"` runs the `rm` as root too, and
+      // `BASH_ENV=/tmp/evil sh -c "git status; ls"` runs the attacker's file
+      // before both.
+      opaque: outerOpaque || !inner.ok || e.opaque,
+      argsUnknown: carry.argsUnknown === true || e.argsUnknown,
+      notes: dedupe([...notes, ...e.notes]),
+      ...(paths.length ? { wrapperPaths: paths } : {}),
+    };
   };
+
+  const result = dress(all[0]!, true);
+  const siblings = all.slice(1).map((e) => dress(e, false));
+  return siblings.length ? { ...result, siblings } : result;
 }
 
 /**
@@ -660,21 +749,47 @@ export function effectiveCommands(
   commands: ParsedCommand[],
   opts: TokenizeOptions = {},
 ): EffectiveCommand[] {
+  return expandAll(commands, opts, 0);
+}
+
+/**
+ * The one place a command list becomes a flat inventory.
+ *
+ * Top-level text and payload text go through this same function, which is the
+ * whole invariant: an action the parser never produced can never be judged, so
+ * "what does this run" must have exactly one answer computed exactly one way.
+ */
+function expandAll(
+  commands: ParsedCommand[],
+  opts: TokenizeOptions,
+  depth: number,
+): EffectiveCommand[] {
   const out: EffectiveCommand[] = [];
-
-  // Flatten any payload tail, however deeply it nests. This used to be a
-  // special case for `sh -c` only, which meant `trap 'a | b'` and
-  // `ssh host 'a; b'` lost everything after the first command.
-  const emit = (e: EffectiveCommand, seen = 0) => {
-    out.push(e);
-    if (seen > 6) return;
-    for (const sib of e.siblings ?? []) emit(sib, seen + 1);
-  };
-
   for (const c of commands) {
-    if (!c.name && c.assignments.length) continue; // bare assignment
-    emit(unwrap(c, opts));
+    // Note what is *not* filtered here. A command with no program used to be
+    // dropped on the floor, which meant `PATH=/tmp/evil; npm test` was judged
+    // as a plain `npm test` — byte-identical to the honest command, so it spent
+    // its approvals — and `X=1 > ~/.bashrc` produced no action at all, so the
+    // write to the startup file was never seen. The space-separated spelling
+    // `PATH=/tmp/evil npm test` was correctly refused the whole time; a
+    // semicolon was the entire bypass.
+    out.push(...flatten(unwrap(c, opts, depth)));
   }
+  return out;
+}
+
+/**
+ * One effective command followed by everything hiding in its payload.
+ *
+ * The tree is taken apart on the way out: a flattened element carries no
+ * `siblings`, so there is exactly one walk of the structure and no caller can
+ * half-walk it. Half-walking it is what the bug was.
+ */
+function flatten(e: EffectiveCommand, depth = 0): EffectiveCommand[] {
+  const { siblings, ...head } = e;
+  const out: EffectiveCommand[] = [head];
+  if (depth > 24) return out;
+  for (const sib of siblings ?? []) out.push(...flatten(sib, depth + 1));
   return out;
 }
 
@@ -712,6 +827,37 @@ function stripFlags(argv: string[], valueFlags?: Set<string>): string[] {
     k++;
   }
   return argv.slice(k);
+}
+
+function dedupe(items: string[]): string[] {
+  return [...new Set(items)];
+}
+
+/**
+ * The command string of `env -S`, in every spelling coreutils accepts.
+ *
+ * Returns undefined when there is no `-S`, which is the common case — and
+ * deliberately returns undefined rather than guessing for bundles like `-uS`,
+ * where `-u` takes a value and `S` is that value. Failing to recognise it is
+ * safe: with `-S` no longer in VALUE_FLAGS, an unrecognised spelling leaves the
+ * payload sitting in the program position, where it classifies as a program
+ * nobody knows and can never be auto-approved.
+ */
+function splitStringPayload(argv: string[]): string | undefined {
+  for (let k = 1; k < argv.length; k++) {
+    const a = argv[k]!;
+    if (a === '-S' || a === '--split-string') return argv[k + 1];
+    if (a.startsWith('--split-string=')) return a.slice('--split-string='.length);
+    if (a.startsWith('-S') && a.length > 2) return a.slice(2);
+    // The first word that is not a flag is the program (or an assignment
+    // prefix): anything after it is that program's own argument, and an `-S`
+    // there belongs to it, not to env.
+    if (!a.startsWith('-') || a === '-') break;
+    // A flag that takes a value swallows the next word, which must not be
+    // mistaken for the payload.
+    if (VALUE_FLAGS['env']!.has(a)) k++;
+  }
+  return undefined;
 }
 
 function findExecEnd(argv: string[], from: number): number {
