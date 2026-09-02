@@ -769,6 +769,23 @@
       "expect": "not-allow",
       "note": "Not filesystem-specific: the collapse was in the templater, so every batch-shaped MCP tool had it.",
       "identity": "no-text-form"
+    },
+    {
+      "id": "mcp-arguments/stacked-sql",
+      "class": "mcp-arguments",
+      "command": "mcp__db__query",
+      "wire": {
+        "agent": "claude-code",
+        "tool": "mcp__db__query",
+        "toolInput": {
+          "statements": [
+            "select 1; drop table users"
+          ]
+        }
+      },
+      "identity": "no-text-form",
+      "expect": "not-allow",
+      "note": "The SQL templater keyed on the leading verb, so a drop stacked onto a select signed as <sql:select> and inherited a read's approvals. The SQL spelling of a shell semicolon."
     }
   ]
 }

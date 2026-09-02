@@ -645,6 +645,14 @@ export function taintConcern(session: SessionState, capability: Capability, blas
   if (session.taints.has('read-secrets') && capability === 'exec.vcs.publish') {
     return 'this session already read a credential file, and this call pushes to a remote';
   }
+  // An MCP call is a call to a server. Whether that server is on this machine
+  // or across the internet is not something LeastGrant can see, and the
+  // arguments are arbitrary JSON the agent composed — which is exactly the
+  // shape of a credential leaving. This was missing while `curl` was covered,
+  // so the same exfiltration performed through an MCP tool raised nothing.
+  if (session.taints.has('read-secrets') && capability === 'mcp.call') {
+    return 'this session already read a credential file, and this call hands data to an MCP server';
+  }
   if (session.taints.has('fetched-code') && capability === 'exec.unknown') {
     return 'this session downloaded packages, and this call runs code we cannot inspect';
   }

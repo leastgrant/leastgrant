@@ -171,7 +171,46 @@ const SQL_VERB = /^\s*(?:\/\*.*?\*\/\s*)?(--[^\n]*\n\s*)*(select|insert|update|d
 
 export function sqlShape(arg: string): string | undefined {
   const m = SQL_VERB.exec(arg);
-  return m?.[2] ? `<sql:${m[2].toLowerCase()}>` : undefined;
+  if (!m?.[2]) return undefined;
+  const verb = m[2].toLowerCase();
+
+  // A statement that carries more statements is not the verb it starts with.
+  //
+  // `select 1; drop table users` matched `select` and templated as
+  // `<sql:select>` — identical to `select 1`, so approvals of an ordinary read
+  // covered a table drop. Stacked statements are the SQL spelling of the shell
+  // `;` that `shell-composition` cases already cover, and the same rule applies:
+  // the leading token is not the action when there is a second one behind it.
+  //
+  // Not an attempt to parse SQL. It only has to answer "is there more than one
+  // statement here", conservatively — a trailing semicolon is just punctuation,
+  // and a semicolon inside a quoted string is not a separator. Anything it
+  // cannot be sure about is treated as stacked, which is the safe direction:
+  // the worst outcome is a distinct signature for a statement that did not need
+  // one, which costs approvals rather than safety.
+  return hasStackedStatement(arg) ? `<sql:${verb}+more>` : `<sql:${verb}>`;
+}
+
+/** Is there a second statement after the first semicolon that is not inside a string? */
+function hasStackedStatement(sql: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]!;
+    if (quote) {
+      // Doubled quote is an escaped quote in SQL, not a terminator.
+      if (ch === quote) {
+        if (sql[i + 1] === quote) i++;
+        else quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === ';') return sql.slice(i + 1).trim().length > 0;
+  }
+  return false;
 }
 
 /**

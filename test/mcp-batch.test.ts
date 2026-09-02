@@ -33,7 +33,7 @@ import * as path from 'node:path';
 import type { Config } from '../src/core/types.js';
 import { analyze } from '../src/core/classify.js';
 import { decide } from '../src/core/decide.js';
-import { newEnvelope, newSession, observe, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
+import { newEnvelope, newSession, observe, applyTaint, taintConcern, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
 import { DEFAULT_CONFIG } from '../src/store/index.js';
 
 const WS = path.join(os.tmpdir(), 'leastgrant-mcp-batch-ws');
@@ -151,5 +151,64 @@ describe('learning an ordinary batch does not buy the one with a key in it', () 
     const v = verdict({ paths: ['src/a.ts', KEY] });
     assert.notEqual(v.decision, 'allow', `AUTO-APPROVED a credential read: ${v.headline}`);
     assert.equal(v.floor, true, 'no floor, so an adapter that cannot ask would stand aside');
+  });
+});
+
+describe('an MCP call is a call to a server', () => {
+  test('a credential read through MCP taints the session', () => {
+    // Without this the sequence guard is blind to the whole MCP surface: the
+    // credential is read, nothing is recorded, and the outbound call that
+    // follows sees a clean session.
+    const a = act('mcp__filesystem__read_file', { path: KEY });
+    const s = newSession('x', AT);
+    applyTaint(s, a.capability);
+    assert.ok(s.taints.has('read-secrets'), `capability was ${a.capability}, which taints nothing`);
+  });
+
+  test('and a later MCP call is treated as somewhere data can go', () => {
+    // `curl` was covered and `mcp__slack__post_message` was not, so the same
+    // exfiltration performed through a tool raised nothing. Whether the server
+    // is local or across the internet is not visible from here, and the
+    // arguments are arbitrary JSON the agent composed.
+    const s = newSession('y', AT);
+    applyTaint(s, 'secret.read');
+    const call = act('mcp__slack__post_message', { text: 'hi' });
+    assert.ok(
+      taintConcern(s, call.capability, call.blast),
+      'reading a key then handing data to an MCP server raised nothing',
+    );
+  });
+
+  test('an untainted session is not made to worry by the same call', () => {
+    const s = newSession('z', AT);
+    const call = act('mcp__slack__post_message', { text: 'hi' });
+    assert.equal(taintConcern(s, call.capability, call.blast), null);
+  });
+});
+
+describe('a SQL statement that carries more statements is not its first verb', () => {
+  test('stacking a drop onto a select changes the identity', () => {
+    const read = act('mcp__db__query', { statements: ['select 1'] });
+    const stacked = act('mcp__db__query', { statements: ['select 1; drop table users'] });
+    assert.notEqual(
+      stacked.signature,
+      read.signature,
+      'approvals of an ordinary read would cover a table drop appended to it',
+    );
+  });
+
+  test('a semicolon inside a string is punctuation, not a second statement', () => {
+    // The cost check. Over-splitting would give every query containing a
+    // semicolon in its data a separate identity, which is friction with no
+    // safety behind it.
+    const plain = act('mcp__db__query', { statements: ['select 1'] });
+    const quoted = act('mcp__db__query', { statements: ["select 'a; b'"] });
+    assert.equal(quoted.signature, plain.signature);
+  });
+
+  test('a trailing semicolon is punctuation too', () => {
+    const plain = act('mcp__db__query', { statements: ['select 1'] });
+    const trailing = act('mcp__db__query', { statements: ['select 1;'] });
+    assert.equal(trailing.signature, plain.signature);
   });
 });
