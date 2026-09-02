@@ -406,9 +406,9 @@ export function docsIndex(facts) {
   <div class="shell">
     <p class="eyebrow">documentation</p>
     <h1>Everything here is a view of the repository</h1>
-    <p class="lede">These pages render the Markdown files that ship with LeastGrant, at the version
-      that shipped. Nothing is rewritten for the website, so there is no second set of docs to drift
-      out of date — and every page says which file it came from.</p>
+    <p class="lede">These pages render the Markdown files that ship with LeastGrant, as they stand at
+      v${esc(facts.version)}. Nothing is rewritten for the website, so there is no second set of docs
+      to drift out of date — and every page says which file it came from.</p>
 
     <div class="cards">
       ${cards}

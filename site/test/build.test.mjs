@@ -397,6 +397,37 @@ describe('the site does not invent facts', () => {
     assert.ok(home.includes(`v${pkg.version}`), `home page does not mention v${pkg.version}`);
   });
 
+  test('no page names a LeastGrant version other than the current one', () => {
+    // The version reaches the page through facts.version, which is read from
+    // package.json at build time, so a release updates the site by being
+    // released. That only holds while nobody types a version by hand, and a
+    // hardcoded one is invisible until it is months stale — the home page test
+    // above would still pass, because the correct version is also present.
+    //
+    // Matched on our own major so the versions of other tools on these pages
+    // (Cursor v2.1.240, codex-cli 0.152.0) are not swept up.
+    //
+    // Prose the site writes, not the Markdown it renders. THREAT-MODEL.md says
+    // "what the v0.1.0 audit found" and RELEASING.md uses `v0.1.1` as the tag
+    // in an example command; both are correct, and both are the repository's
+    // words. A docs page that edited them to look current would be exactly the
+    // drift these pages exist to avoid. If that text is wrong, it is wrong in
+    // the repository, and that is where it gets fixed.
+    const rendered = /^docs\/[^/]+\/index\.html$/;
+
+    const pkg = JSON.parse(fs.readFileSync(path.join(SITE, '..', 'package.json'), 'utf8'));
+    const major = pkg.version.split('.')[0];
+    const ours = new RegExp(`v${major}\\.\\d+\\.\\d+`, 'g');
+
+    const stale = [];
+    for (const page of pages.filter((p) => !rendered.test(p.file))) {
+      for (const found of new Set(page.html.match(ours) ?? [])) {
+        if (found !== `v${pkg.version}`) stale.push(`${page.file}: ${found}`);
+      }
+    }
+    assert.deepEqual(stale, [], `stale version strings (current is v${pkg.version})`);
+  });
+
   test('every terminal block on the home page is a real verdict', () => {
     const home = pages.find((p) => p.file === 'index.html').html;
     // Each captured block keeps the CLI's own shape: two leading spaces, a

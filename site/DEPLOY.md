@@ -359,6 +359,13 @@ Rollback is unchanged, and needs no network — but the next tick will roll you
 forward again. Revert the commit rather than the symlink, or `systemctl stop
 leastgrant-site-update.timer` first.
 
+**The deployer does not deploy itself.** `/srv/leastgrant/update.sh` and the two
+unit files are copies; editing them in the repository changes nothing on the
+origin until you reinstall them with the commands above. This is deliberate — a
+script that rewrites itself mid-run is a bad way to find out about a typo — but
+it does mean a change to `site/deploy/` is the one change that still needs an
+`ssh`.
+
 The Cloudflare Tunnel token stays on this machine and is not involved. It is not
 needed to deploy content, and a token that can register as your tunnel is a far
 larger credential than "may upload files" — which is the other reason this is a
