@@ -356,9 +356,16 @@ function claudeCode(scope: 'user' | 'project', uninstall: boolean): Installed {
 // Cursor
 // ---------------------------------------------------------------------------
 
+interface CursorHook {
+  command: string;
+  /** Refuse the tool call if the hook cannot answer. See `cursor()`. */
+  failClosed?: boolean;
+  [k: string]: unknown;
+}
+
 interface CursorHooks {
   version?: number;
-  hooks?: Record<string, { command: string }[]>;
+  hooks?: Record<string, CursorHook[]>;
   [k: string]: unknown;
 }
 
@@ -380,9 +387,31 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
       : path.join(process.cwd(), '.cursor', 'hooks.json');
 
   const cfg = readJson<CursorHooks>(file) ?? { version: 1, hooks: {} };
-  const hooks: Record<string, { command: string }[]> = (cfg.hooks ??= {});
+  const hooks: Record<string, CursorHook[]> = (cfg.hooks ??= {});
   const command = selfCommand().replace(/ hook$/, ' hook --agent cursor');
   let changed = false;
+
+  /**
+   * `failClosed` asks Cursor to refuse the tool call if this hook cannot
+   * answer, rather than running it.
+   *
+   * Cursor has supported it per-script for some time and LeastGrant was writing
+   * bare `{command}` entries, which take the default: on a crash, a timeout, or
+   * a node that will not start, the call proceeds unchecked. That is the one
+   * failure mode a permission layer cannot shrug at, because it is silent and
+   * it is exactly when something is already wrong.
+   *
+   * It is not free. If LeastGrant is broken, Cursor stops working rather than
+   * merely stopping being protected, and the fix is to remove the hook. That is
+   * the right way round for a tool whose whole claim is that it gates things,
+   * and it matches Copilot, where the same choice is made for us.
+   *
+   * Only on the `before*` events. On an `after*` event the command has already
+   * run, so there is no longer anything to refuse — failing closed there would
+   * reject the *result* of work that already happened, which protects nothing
+   * and turns a broken hook into corrupted output.
+   */
+  const GATES = new Set(['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']);
 
   for (const event of [
     'beforeShellExecution',
@@ -394,7 +423,8 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     'afterShellExecution',
     'afterMCPExecution',
   ]) {
-    const list: { command: string }[] = (hooks[event] ??= []);
+    const entry: CursorHook = GATES.has(event) ? { command, failClosed: true } : { command };
+    const list: CursorHook[] = (hooks[event] ??= []);
     const idx = list.findIndex((h) => isOurs(h.command));
     if (uninstall) {
       if (idx >= 0) {
@@ -403,7 +433,7 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
       }
       if (list.length === 0) delete hooks[event];
     } else if (idx < 0) {
-      list.push({ command });
+      list.push({ ...entry });
       changed = true;
     } else if (list[idx]!.command !== command) {
       // Refresh a stale path rather than leaving a hook that cannot start.

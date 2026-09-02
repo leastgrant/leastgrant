@@ -53,11 +53,16 @@ describe('cursor: event routing', () => {
     for (const e of [
       'beforeShellExecution', 'afterShellExecution',
       'beforeMCPExecution', 'afterMCPExecution',
-      'beforeReadFile', 'afterReadFile',
+      'beforeReadFile',
     ]) {
       assert.equal(isCursorEvent(e), true, e);
     }
-    for (const e of ['PreToolUse', 'PostToolUse', 'sessionStart', 'afterAgentThought', 'afterFileEdit', '']) {
+    // `afterReadFile` is in this list on purpose. It does not exist in Cursor
+    // 3.18.25 and never has — the old matcher was a regex crossing
+    // (before|after) with three subjects, so it generated an event nobody
+    // ships, and this test asserted we recognised it. Cursor drops unknown
+    // step names from hooks.json without warning, so nothing would have said so.
+    for (const e of ['afterReadFile', 'PreToolUse', 'PostToolUse', 'sessionStart', 'afterAgentThought', 'afterFileEdit', '']) {
       assert.equal(isCursorEvent(e), false, e);
     }
   });

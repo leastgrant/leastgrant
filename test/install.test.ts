@@ -135,6 +135,40 @@ describe('install: it never touches a hook it did not add', () => {
   }
 });
 
+describe('install: Cursor is asked to fail closed on the gates', () => {
+  // Cursor supports `failClosed` per script and LeastGrant was not using it, so
+  // a hook that crashed, timed out, or could not start left the call to proceed
+  // unchecked — silently, and precisely when something was already wrong.
+  test('the before* events carry failClosed and the after* events do not', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-failclosed-'));
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
+    const file = path.join(home, '.cursor', 'hooks.json');
+    fs.writeFileSync(file, '{"version":1,"hooks":{}}');
+
+    run(home, 'install', 'cursor');
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, { command: string; failClosed?: boolean }[]>;
+    };
+
+    for (const event of ['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']) {
+      const ours = cfg.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      assert.ok(ours, `no LeastGrant entry on ${event}`);
+      assert.equal(ours.failClosed, true, `${event} would let the call through if the hook broke`);
+    }
+
+    for (const event of ['afterShellExecution', 'afterMCPExecution']) {
+      const ours = cfg.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      assert.ok(ours, `no LeastGrant entry on ${event}`);
+      assert.notEqual(
+        ours.failClosed,
+        true,
+        `${event} is an observation — the command already ran, so failing closed there ` +
+          `rejects the result of work that already happened and protects nothing`,
+      );
+    }
+  });
+});
+
 describe('install: it refuses rather than pretending', () => {
   for (const shape of ['[]', '"a string"', '42', '{"hooks":"not an object"}']) {
     test(`a config that is ${shape} is refused out loud`, () => {

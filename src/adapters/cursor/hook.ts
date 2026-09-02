@@ -17,18 +17,26 @@
  *   - `cwd` is only present on shell events; everything else carries
  *     `workspace_roots`.
  *
- * Exit codes match Claude's shape: 0 with JSON is a decision, anything
- * unexpected is a non-blocking failure that lets the call through. So this file
- * has the same overriding requirement as the Claude adapter — never wedge the
- * agent — and the same answer to it: everything is wrapped, and the worst case
- * is "no opinion".
+ * Malformed output is NOT a no-op here, and this file used to say it was.
+ *
+ * The claim was that a wrong field name means "Cursor ignores our output and
+ * LeastGrant is simply absent — the same position a user is in with no hook at
+ * all, not a worse one". Read against the shipped 3.18.25 bundles, that is
+ * backwards: invalid or schema-invalid JSON on beforeShellExecution,
+ * beforeMCPExecution or beforeReadFile makes Cursor DENY the tool call
+ * (workbench.desktop.main.js, the response validator at @19851459). A bug in
+ * this file therefore wedges the agent rather than standing aside.
+ *
+ * That cuts both ways and the second half is worth stating plainly: it means
+ * Cursor is the one agent besides Copilot where LeastGrant fails CLOSED, which
+ * is the safer direction. But it raises the cost of a mistake here from
+ * "silently absent" to "nothing works", so everything is still wrapped and the
+ * output shape is still asserted by tests.
  *
  * Honesty note, because it belongs in the source and not only in the README:
- * this is written against Cursor's published hook documentation and is
- * exercised by unit tests over the request and response shapes. It has not been
- * run against a live Cursor install. If a field name here is wrong, Cursor
- * ignores our output and LeastGrant is simply absent — the same position a user
- * is in with no hook at all, not a worse one.
+ * the contract below is read out of the shipped Cursor bundles and exercised by
+ * unit tests over the request and response shapes. It has still never run
+ * inside a live Cursor session.
  */
 
 import type { Decision } from '../../core/types.js';
@@ -82,8 +90,37 @@ function sessionOf(input: CursorInput): string {
 function cwdOf(input: CursorInput): string {
   if (typeof input.cwd === 'string' && input.cwd) return input.cwd;
   const roots = input.workspace_roots;
-  if (Array.isArray(roots) && typeof roots[0] === 'string' && roots[0]) return roots[0];
+  if (Array.isArray(roots) && typeof roots[0] === 'string' && roots[0]) return fromUriPath(roots[0]);
   return process.cwd();
+}
+
+/**
+ * `workspace_roots` entries are VS Code `uri.path` values, not filesystem paths.
+ *
+ * On Windows that means `/d:/LeastGrant`, with a leading slash and forward
+ * slashes, and using it directly produced a *different project key* from the
+ * `cwd` that shell events carry — so reads and MCP calls in a project learned
+ * under one identity and shell commands in the same project under another.
+ * Neither half ever accumulated enough evidence to settle, and `leastgrant
+ * status` showed one project twice.
+ *
+ * Read events are also the ones that matter most for this: they are the only
+ * place a credential read shows up on Cursor, and a mis-keyed project means the
+ * rule you wrote for it does not match.
+ */
+function fromUriPath(value: string): string {
+  // Percent-encoding is part of the URI form; a project path with a space
+  // arrives as %20. Decoding can throw on a malformed sequence, and a path we
+  // cannot decode is better left as-is than turned into an exception.
+  let p = value;
+  try {
+    p = decodeURIComponent(value);
+  } catch {
+    // Keep the raw form.
+  }
+  // `/d:/x` -> `d:/x`. Only when a drive letter follows, so POSIX absolute
+  // paths like `/home/you/proj` are untouched.
+  return /^\/[a-zA-Z]:/.test(p) ? p.slice(1) : p;
 }
 
 /**
@@ -101,7 +138,13 @@ function render(decision: Decision, reason: string, canAsk: boolean, reasons: st
   // a rule and moves on — whereas silently allowing it is not recoverable at
   // all. Everything else degrades to `allow`, because turning every unfamiliar
   // read into a hard block would make the integration unusable.
-  const mustNotPass = reasons.some((r) => r === 'guard.secret-read' || r === 'guard.self-write');
+  // `guard.self-write` used to be in this list and has been removed, because
+  // it could never fire on the events that reach here. Cursor has no
+  // before-write event at all — no beforeWriteFile, no beforeFileEdit, no
+  // pre-delete — so a write to LeastGrant's own state is not interceptable on
+  // Cursor by any means. Listing it here implied a protection that did not
+  // exist. The read events this does cover cannot write anything.
+  const mustNotPass = reasons.some((r) => r === 'guard.secret-read');
   const permission =
     decision === 'ask' && !canAsk ? (mustNotPass ? 'deny' : 'allow') : decision;
   const out: Record<string, unknown> = { permission };
@@ -195,8 +238,29 @@ export function runCursorHook(raw: unknown): void {
 
 /** Is this an event this adapter handles? Used to route without a flag. */
 export function isCursorEvent(name: string): boolean {
-  return /^(before|after)(ShellExecution|MCPExecution|ReadFile)$/i.test(name);
+  return CURSOR_EVENTS.has(name.toLowerCase());
 }
+
+/**
+ * The events this adapter handles, named individually.
+ *
+ * This was a regex crossing `(before|after)` with the three subjects, which
+ * generates `afterReadFile` — an event Cursor does not have and has never had.
+ * The test suite asserted we recognised it, `runCursorHook`'s switch had no
+ * case for it, and Cursor's own loader silently drops unknown step names from
+ * hooks.json, so nothing anywhere would have said so.
+ *
+ * A regex that produces the cartesian product cannot be checked against a real
+ * event list. A set can, and this one is the shipped `cql` step list in Cursor
+ * 3.18.25, filtered to what we actually implement.
+ */
+const CURSOR_EVENTS = new Set([
+  'beforeshellexecution',
+  'aftershellexecution',
+  'beforemcpexecution',
+  'aftermcpexecution',
+  'beforereadfile',
+]);
 
 /** Exported for tests: the posture check the adapter relies on. */
 export function cursorPosture(): string {
