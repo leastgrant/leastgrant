@@ -655,7 +655,7 @@ values are normalized like positional arguments, so `--output=/tmp/x` becomes
 **Outside is not one place.** `outsideZone` splits the outside token seven ways —
 `<path:outside:credential-tree>`, `:etc`, `:system`, `:runtime`, `:temp`, `:home` and
 `:other`, from a directory that sits *above* somebody's credentials (`~`, `/home`,
-`/Users/alice`, `/etc`, `C:\`, `/`);
+`/Users/you`, `/etc`, `C:\`, `/`);
 `/etc`; `/usr` `/opt` `/bin` `/sbin` `/lib` plus `C:\Windows` and `C:\Program Files`;
 `/var` `/proc` `/sys` `/dev`; anything under a `tmp` or `temp` directory; anything under
 `/home` or `/Users`; and everything left over. Every outside path used to collapse into a

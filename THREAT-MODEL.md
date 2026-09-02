@@ -857,7 +857,7 @@ file those lists do not recognise is inside the same equivalence class as the on
 approved. You can extend the lists with `secretPatterns` in your config.
 
 `credential-tree` is the zone that is *not* a region: it holds exactly the directories
-that sit above a credential store — `~`, `~/.config`, `/home`, `/Users/alice`, `/etc`,
+that sit above a credential store — `~`, `~/.config`, `/home`, `/Users/you`, `/etc`,
 `C:\`, `/`. It exists because the region split was not enough on its own. `~` and
 `~/Documents` were both `home`, so twenty approvals of `grep -r <phrase> ~/Documents`
 promoted the signature that `grep -r "BEGIN OPENSSH PRIVATE KEY" ~` also carried — and
