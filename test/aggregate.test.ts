@@ -26,9 +26,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Config, Rule } from '../src/core/types.js';
+import type { BlastRadius, Config, Envelope, Familiarity, Rule } from '../src/core/types.js';
 import { decide } from '../src/core/decide.js';
-import { newEnvelope, newSession, applyTaint, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
+import { newEnvelope, newSession, applyTaint, observe, familiarity, canPromote, DEFAULT_THRESHOLDS } from '../src/core/envelope.js';
 import { DEFAULT_CONFIG } from '../src/store/index.js';
 
 const WS = fs.mkdtempSync(path.join(os.tmpdir(), 'leastgrant-aggregate-'));
@@ -190,4 +190,55 @@ describe('adding an action never makes a request more permissive', () => {
       assert.ok(!p.floor || w.floor, 'adding an action removed a floor');
     });
   }
+});
+
+describe('the day and session gate counts approvals, not sightings', () => {
+  // `minDays` / `minSessions` exist to stop a burst of prompt-clicks inside one
+  // session from teaching a habit — SignatureStat says so in as many words. But
+  // they were counted from sightings of any kind, and a sighting is something
+  // the agent produces by itself just by running the command. So an agent could
+  // run something twice on two different days in bypass mode, satisfying "two
+  // days, two sessions" before a human had approved anything, and eleven clicks
+  // in one eleven-second burst then promoted it to allow.
+  const NIL: BlastRadius = { reach: 'workspace', reversibility: 'easy', exposure: 'none', scale: 'single' };
+  const DAY = 86_400_000;
+
+  const build = (seed: (e: Envelope) => void): Familiarity => {
+    const env = newEnvelope('project', 'k');
+    seed(env);
+    return familiarity(
+      env,
+      { signature: 'sig', capability: 'exec.test', blast: NIL, at: AT + 20_000 },
+      DEFAULT_THRESHOLDS,
+    );
+  };
+  const see = (e: Envelope, evidence: 'observed' | 'confirmed', at: number, sessionId: string) =>
+    observe(e, { signature: 'sig', capability: 'exec.test', blast: NIL, evidence, at, sessionId, display: 'x' });
+
+  test('sightings on two days do not unlock a single burst of approvals', () => {
+    const f = build((e) => {
+      see(e, 'observed', AT - 2 * DAY, 's1');
+      see(e, 'observed', AT - DAY, 's2');
+      for (let i = 0; i < 11; i++) see(e, 'confirmed', AT + i * 1000, 'burst');
+    });
+    assert.equal(f.approvedDays, 1, 'every approval happened on one day');
+    assert.equal(f.approvedSessions, 1);
+    assert.equal(
+      canPromote(f, NIL, DEFAULT_THRESHOLDS).eligible,
+      false,
+      'unattended sightings satisfied the gate that exists to require spread-out human approval',
+    );
+  });
+
+  test('approvals genuinely spread across two days and sessions still promote', () => {
+    // The other half. A fix that simply made promotion harder would pass the
+    // test above and break the product.
+    const f = build((e) => {
+      for (let i = 0; i < 6; i++) see(e, 'confirmed', AT - DAY + i * 1000, 'a');
+      for (let i = 0; i < 5; i++) see(e, 'confirmed', AT + i * 1000, 'b');
+    });
+    assert.equal(f.approvedDays, 2);
+    assert.equal(f.approvedSessions, 2);
+    assert.equal(canPromote(f, NIL, DEFAULT_THRESHOLDS).eligible, true);
+  });
 });

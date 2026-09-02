@@ -195,6 +195,22 @@ export interface SignatureStat {
   /** Distinct session ids and UTC day-stamps observed, capped for size. */
   sessions: number;
   days: number;
+  /**
+   * The same two counts over APPROVALS only.
+   *
+   * `sessions` and `days` count sightings, which the agent generates itself
+   * just by running something. The promotion gate exists to stop a burst of
+   * clicks in one session from teaching a habit, and sightings cannot carry
+   * that meaning — so it is these that gate promotion, and the sighting counts
+   * that feed autopilot's observation-only route, where observations really are
+   * the evidence.
+   *
+   * Optional because envelopes written before this existed do not have them.
+   * Absent reads as zero, which costs a few re-approvals and is the safe
+   * direction; the envelope is a rebuildable cache and refusals live elsewhere.
+   */
+  approvedSessions?: number;
+  approvedDays?: number;
   /** Worst blast radius ever seen for this signature. */
   worstBlast: BlastRadius;
   /** Sample display strings, redacted, for the UI. Capped. */
@@ -299,6 +315,9 @@ export interface Familiarity {
   observed: number;
   sessions: number;
   days: number;
+  /** Distinct sessions and days on which a human actually approved. */
+  approvedSessions: number;
+  approvedDays: number;
   /** Lower bound of a Wilson interval on the approval rate. */
   approvalLowerBound: number;
   /** True if this signature has never been seen in this scope before. */

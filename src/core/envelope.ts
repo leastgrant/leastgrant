@@ -268,6 +268,8 @@ export function observe(env: Envelope, input: ObserveInput, th: Thresholds = DEF
   // Bucketed by the tier this occurrence actually reached, so a promotion can
   // only ever spend evidence gathered at or above the tier it is deciding.
   const tierNow = blastTier(input.blast);
+  // A human said yes, either at a prompt or deliberately during setup.
+  const isApproval = input.evidence === 'confirmed' || input.evidence === 'granted';
   const m2 = s as MutableStat;
   m2._byTier ??= {};
   const bucket = (m2._byTier[tierNow] ??= { confirmed: 0, observed: 0 });
@@ -327,6 +329,38 @@ export function observe(env: Envelope, input: ObserveInput, th: Thresholds = DEF
     if (recent.length > 16) recent.shift();
   }
 
+  // The same two counts, over APPROVALS only.
+  //
+  // `days` and `sessions` above count sightings of any kind, and the promotion
+  // gate they feed exists to stop a burst of prompt-clicks inside one session
+  // from teaching a habit. Sightings do not carry that meaning: the agent
+  // generates them itself, unattended, just by running the command. So running
+  // something twice on two days in bypass mode satisfied "two days, two
+  // sessions" before a human had approved anything, and eleven clicks in one
+  // eleven-second burst then promoted it.
+  //
+  // Counted separately rather than by changing the meaning of the fields above,
+  // because autopilot's observation-only route legitimately wants the sighting
+  // count — there, observations are the evidence, and requiring approvals would
+  // be requiring the thing that route exists to do without.
+  if (isApproval) {
+    const okDays = m._approvedDays ?? (m._approvedDays = []);
+    if (usableTime && !okDays.includes(day)) {
+      s.approvedDays = (s.approvedDays ?? 0) + 1;
+      okDays.push(day);
+      if (okDays.length > 32) {
+        okDays.sort((a, b) => a - b);
+        okDays.shift();
+      }
+    }
+    const okSessions = m._approvedSessions ?? (m._approvedSessions = []);
+    if (!okSessions.includes(input.sessionId)) {
+      s.approvedSessions = (s.approvedSessions ?? 0) + 1;
+      okSessions.push(input.sessionId);
+      if (okSessions.length > 16) okSessions.shift();
+    }
+  }
+
   if (s.samples.length < 3 && !s.samples.includes(input.display)) {
     s.samples.push(input.display);
   }
@@ -347,6 +381,8 @@ interface MutableStat extends SignatureStat {
   _lastDay?: number;
   _recentDays?: number[];
   _recentSessions?: string[];
+  _approvedDays?: number[];
+  _approvedSessions?: string[];
 }
 
 /**
@@ -394,6 +430,8 @@ export function familiarity(
       observed: 0,
       sessions: 0,
       days: 0,
+      approvedSessions: 0,
+      approvedDays: 0,
       approvalLowerBound: 0,
       novel: true,
       novelTransition: q.previousCapability
@@ -444,6 +482,8 @@ export function familiarity(
     observed,
     sessions: s.sessions,
     days: s.days,
+    approvedSessions: s.approvedSessions ?? 0,
+    approvedDays: s.approvedDays ?? 0,
     approvalLowerBound: wilsonLowerBound(confirmed, confirmed + denied),
     novel: false,
     novelTransition: q.previousCapability
@@ -520,7 +560,7 @@ export function canPromote(
   let humanGap: PromotionResult | null = null;
   if (fam.confirmed >= 1) {
     const have = wilsonLowerBound(fam.confirmed, fam.confirmed + fam.denied);
-    if (have >= required && fam.days >= th.minDays && fam.sessions >= th.minSessions) {
+    if (have >= required && fam.approvedDays >= th.minDays && fam.approvedSessions >= th.minSessions) {
       return { eligible: true, reason: 'promoted', required, have };
     }
     humanGap =
@@ -537,7 +577,7 @@ export function canPromote(
             required,
             have,
           }
-        : fam.days < th.minDays
+        : fam.approvedDays < th.minDays
           ? { eligible: false, reason: 'needs-more-days', required, have }
           : { eligible: false, reason: 'needs-more-sessions', required, have };
   }
