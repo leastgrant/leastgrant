@@ -145,6 +145,32 @@ Claims in our docs that upstream evidence contradicts (must fix before release):
 - Antigravity: strongest ask semantics of any agent (non-suppressible
   force_ask). Spike running.
 
+## UNKNOWN-RATE MEASUREMENT (§17) - DONE, and the answer is "do not chase it"
+`node scripts/measure-unknowns.mjs`, 7,399 real Bash commands from 120 local
+transcripts. Raw JSON in `.sprint/unknown-rate.json`.
+
+    understood                    43.4%   (README says 44.5% - consistent)
+    not understood                56.6%
+      of those unknowns:
+        an interpreter running code we cannot read      78.0%
+        a family a known-tool fix could plausibly reach  5.2%  (2.9% of all)
+
+So the prompt budget is dominated by `python x.py`, `python -c`, `node -e` and
+script files - exactly the class where guessing would be unsafe and where
+"opaque stays opaque" is the correct answer, not a gap. Covering EVERY package
+runner, npm script, build tool, make, test runner and docker invocation
+perfectly would move the understood rate by under 3 points.
+
+**Conclusion: there is no large safe win in the unknown rate.** Effort should go
+to correctness, not coverage. Revisit only if a cheap, sound signal appears for
+interpreter invocations (e.g. hashing a script body so learned evidence dies
+when the body changes) - and that is a much smaller idea than it first looks.
+
+Caveat recorded rather than acted on: this script reports 1.6 ms average, the
+README 0.03 ms. They are not the same measurement (this runs full `analyze()`
+including path canonicalisation; the README figure is the shell parser) and the
+machine had nine agents on it. Not a regression claim - re-measure idle.
+
 ## STILL TO DO
 - capability contract in code (.sprint/capability-contract.md, 41k) - blocked on
   the adapter fixes landing, since it rewrites all adapters.
