@@ -32,6 +32,7 @@ import {
   translate,
 } from '../src/adapters/codex/hook.js';
 import { analyze } from '../src/core/classify.js';
+import { hashKey } from '../src/store/index.js';
 import type { PreOutcome } from '../src/adapters/claude-code/hook.js';
 
 const CLI = path.resolve('bin/leastgrant.js');
@@ -1074,12 +1075,13 @@ describe('codex wire: nothing LeastGrant says on Codex reaches a person', () => 
       permission_mode: 'default',
       session_id: sessionId,
     });
-    const file = path.join(STATE, 'sessions', `${sessionId}.json`);
-    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
-      pendingById?: Record<string, { attended?: boolean }>;
-    };
-    const pending = saved.pendingById?.['att1'];
-    assert.ok(pending, 'the call was not recorded at all');
+    // Session state is a directory of append-only files, not one JSON blob —
+    // see src/adapters/claude-code/session.ts. A pending call is one file under
+    // `p/`, named by the hash of the tool_use_id so an id containing a path
+    // separator cannot escape the directory.
+    const file = path.join(STATE, 'sessions', sessionId, 'p', `${hashKey('att1')}.json`);
+    assert.ok(fs.existsSync(file), `the call was not recorded at all (looked in ${file})`);
+    const pending = JSON.parse(fs.readFileSync(file, 'utf8')) as { attended?: boolean };
     assert.equal(pending.attended, false, 'Codex banked a call as human-attended');
   });
 });
