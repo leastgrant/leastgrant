@@ -24,3 +24,6 @@ site/.brand-preview.*
 
 # Worktrees created by background agents. Never part of the repository.
 .claude/worktrees/
+
+# Working notes for the hardening sprint. Not part of the project.
+.sprint/
