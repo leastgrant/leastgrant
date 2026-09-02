@@ -275,3 +275,34 @@ describe('the version is not written down twice', () => {
     assert.equal((r.stdout ?? '').trim(), `leastgrant ${pkg.version}`);
   });
 });
+
+describe('install: re-running upgrades an entry, not just its path', () => {
+  // The refresh only ever rewrote `command`, so anyone who installed before
+  // `failClosed` existed kept a fail-open entry forever — silently, while
+  // compatibility/cursor.json told them Cursor refuses on a hook failure.
+  // Re-running the installer reported "already installed" and changed nothing.
+  // An upgrade path that cannot deliver a security setting is not one.
+  test('a pre-upgrade Cursor entry gains failClosed on reinstall', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-retrofit-'));
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
+    const file = path.join(home, '.cursor', 'hooks.json');
+
+    run(home, 'install', 'cursor');
+    const before = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, { command: string; failClosed?: boolean }[]>;
+    };
+    // Roll back to what an older install produced.
+    for (const list of Object.values(before.hooks)) for (const h of list) delete h.failClosed;
+    fs.writeFileSync(file, JSON.stringify(before, null, 2));
+
+    run(home, 'install', 'cursor');
+    const after = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      hooks: Record<string, { command: string; failClosed?: boolean }[]>;
+    };
+    for (const event of ['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']) {
+      const ours = after.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      assert.ok(ours, `no entry on ${event}`);
+      assert.equal(ours.failClosed, true, `${event} was not upgraded, so it still fails open`);
+    }
+  });
+});

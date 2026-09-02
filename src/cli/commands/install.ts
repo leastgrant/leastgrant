@@ -446,10 +446,24 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     } else if (idx < 0) {
       list.push({ ...entry });
       changed = true;
-    } else if (list[idx]!.command !== command) {
-      // Refresh a stale path rather than leaving a hook that cannot start.
-      list[idx]!.command = command;
-      changed = true;
+    } else {
+      // Bring an existing entry up to date, not just its path.
+      //
+      // This only refreshed `command`, so anyone who installed before
+      // `failClosed` existed kept a fail-open entry forever, silently, while
+      // compatibility/cursor.json told them Cursor refuses on a hook failure.
+      // Re-running the installer did not fix it and reported "already
+      // installed". An upgrade path that cannot deliver a security setting is
+      // not an upgrade path.
+      const want = { ...entry };
+      const have = list[idx]!;
+      const stale =
+        have.command !== want.command ||
+        Boolean(have.failClosed) !== Boolean(want.failClosed);
+      if (stale) {
+        list[idx] = { ...have, ...want };
+        changed = true;
+      }
     }
   }
 

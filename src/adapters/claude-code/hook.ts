@@ -528,7 +528,26 @@ function readStdin(): Promise<string> {
     process.stdin.on('data', (c) => (data += c));
     process.stdin.on('end', () => {
       clearTimeout(timer);
-      resolve(data);
+      // Strip a leading byte-order mark before anything tries to parse this.
+      //
+      // Cursor on Windows does not write to our stdin directly. It writes the
+      // payload to a temp file and pipes it in through PowerShell:
+      //
+      //   $OutputEncoding = [System.Text.Encoding]::UTF8;
+      //   Get-Content -LiteralPath '<tmp>' -Raw | & { $input | <command> }
+      //
+      // Windows PowerShell 5.1 emits the UTF-8 preamble for that encoding, so
+      // what arrives is EF BB BF + JSON. `JSON.parse` throws on U+FEFF, the
+      // catch exits 0 with no output, and Cursor — with the `failClosed` the
+      // installer now writes — reads no output as a DENY. Measured through
+      // Cursor's real transport: every shell command, MCP call and file read
+      // refused, including `git status` and reading README.md. Not "LeastGrant
+      // is absent", but "nothing works".
+      //
+      // Fixed here rather than in the Cursor adapter on purpose. This is a
+      // property of how a payload can arrive, not of which agent sent it, and
+      // any of the other three could grow the same transport tomorrow.
+      resolve(data.charCodeAt(0) === 0xfeff ? data.slice(1) : data);
     });
     process.stdin.on('error', (e) => {
       clearTimeout(timer);

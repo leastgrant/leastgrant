@@ -265,3 +265,50 @@ describe('cursor: an MCP server cannot choose its own identity', () => {
     );
   });
 });
+
+describe('cursor: the Windows transport delivers a byte-order mark', () => {
+  // Cursor on Windows does not write to our stdin. It writes the payload to a
+  // temp file and pipes it in through PowerShell:
+  //
+  //   $OutputEncoding = [System.Text.Encoding]::UTF8;
+  //   Get-Content -LiteralPath '<tmp>' -Raw | & { $input | <command> }
+  //
+  // Windows PowerShell 5.1 emits the UTF-8 preamble for that encoding, so what
+  // arrives is EF BB BF + JSON. JSON.parse throws on U+FEFF, the catch exits 0
+  // with no output, and Cursor — with the failClosed the installer writes —
+  // reads no output as a DENY.
+  //
+  // So this was not "LeastGrant is silently absent on Cursor". It was "nothing
+  // works": every shell command, MCP call and file read refused, including
+  // `git status` and reading README.md. Measured through Cursor's real
+  // transport before the fix.
+  const withBom = (body: Record<string, unknown>): { out: string; code: number | null } => {
+    const r = spawnSync(process.execPath, [CLI, 'hook'], {
+      input: '\uFEFF' + JSON.stringify({ conversation_id: 'c', generation_id: 'bom' + gen++, workspace_roots: [WS], ...body }) + '\r\n',
+      encoding: 'utf8',
+      env: { ...process.env, LEASTGRANT_HOME: HOME },
+      timeout: 30000,
+    });
+    return { out: (r.stdout ?? '').trim(), code: r.status };
+  };
+
+  test('a payload with a BOM is still answered', () => {
+    const r = withBom({ hook_event_name: 'beforeShellExecution', command: 'git status', cwd: WS });
+    assert.notEqual(r.out, '', 'no output, which failClosed turns into a deny of an ordinary command');
+    assert.ok(['allow', 'ask', 'deny'].includes(String(permissionOf(r.out))), r.out);
+  });
+
+  test('and a credential read through the same transport is still refused', () => {
+    const r = withBom({
+      hook_event_name: 'beforeShellExecution',
+      command: `cat ${posix(path.join(os.homedir(), '.ssh', 'id_rsa'))}`,
+      cwd: WS,
+    });
+    assert.equal(permissionOf(r.out), 'ask');
+  });
+
+  test('the same payload without a BOM is unaffected', () => {
+    const plain = hook({ hook_event_name: 'beforeShellExecution', command: 'git status', cwd: WS });
+    assert.notEqual(plain.out, '');
+  });
+});
