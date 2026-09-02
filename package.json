@@ -1,6 +1,6 @@
 {
   "name": "leastgrant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Permissions that learn how you work. LeastGrant watches what your coding agents normally do, lets the routine flow, and stops the weird stuff.",
   "type": "module",
   "license": "Apache-2.0",
