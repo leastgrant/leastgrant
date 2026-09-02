@@ -144,9 +144,28 @@ export function sqlShape(arg: string): string | undefined {
   return m?.[2] ? `<sql:${m[2].toLowerCase()}>` : undefined;
 }
 
+/**
+ * Shell builtins whose arguments are variable assignments rather than operands.
+ *
+ * These need the same treatment `assignmentSignature` already gives to a
+ * leading `NAME=value` prefix, and for the same reason: the name is the whole
+ * meaning. Without this, `export LD_PRELOAD=/tmp/evil.so` normalized to
+ * `export <path>` — the identical signature to `export CACHE_DIR=/tmp/build` —
+ * so forty ordinary build steps taught LeastGrant to auto-approve an
+ * environment hijack. Reproduced end to end before this was written: allow,
+ * floor false, on LD_PRELOAD, BASH_ENV, NODE_OPTIONS and PYTHONSTARTUP, from
+ * training on the cache directory alone.
+ *
+ * The inline form `LD_PRELOAD=x git status` was never affected, because it goes
+ * through assignmentSignature, whose comment has said "the names are what
+ * matter" since it was written. This is that rule reaching the other spelling.
+ */
+const ASSIGNMENT_BUILTINS = new Set(['export', 'set', 'setenv', 'declare', 'typeset', 'local', 'readonly', 'alias']);
+
 export function commandSignature(argv: string[], ctx: SignatureCtx): string {
   if (!argv.length) return '(empty)';
   const program = argv[0]!;
+  const assigns = ASSIGNMENT_BUILTINS.has(program);
   const flags: string[] = [];
   const positional: string[] = [];
 
@@ -166,7 +185,11 @@ export function commandSignature(argv: string[], ctx: SignatureCtx): string {
       }
       continue;
     }
-    positional.push(normalizeArg(a, ctx));
+    // Keep the name, normalize the value. `alias` is in the same set and wants
+    // the same shape: `alias ls=<dynamic>` must not be learnable as `alias
+    // <dynamic>`, because what is being redefined is the point.
+    const eq = assigns ? a.indexOf('=') : -1;
+    positional.push(eq > 0 ? `${a.slice(0, eq)}=${normalizeArg(a.slice(eq + 1), ctx)}` : normalizeArg(a, ctx));
   }
 
   flags.sort();

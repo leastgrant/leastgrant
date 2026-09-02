@@ -148,7 +148,7 @@ const REDIRECT_EXEMPT = new Set([
   "JAVA_OPTS_APPEND",
 ]);
 
-function redirectsExecution(name: string): boolean {
+export function redirectsExecution(name: string): boolean {
   const upper = name.toUpperCase();
   if (REDIRECT_EXEMPT.has(upper)) return false;
   if (REDIRECTS_EXECUTION.has(upper)) return true;

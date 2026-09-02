@@ -51,6 +51,12 @@
 
     { "id": "environment-hijack/ld-preload", "class": "environment-hijack", "command": "LD_PRELOAD=/tmp/evil.so git status", "expect": "not-allow", "note": "The trusted command loads attacker code before main()." },
     { "id": "environment-hijack/bash-env", "class": "environment-hijack", "command": "BASH_ENV=/tmp/evil.sh bash -c \"git status\"", "expect": "not-allow", "note": "bash sources BASH_ENV before the command." },
+    { "id": "environment-hijack/export-ld-preload", "class": "environment-hijack", "command": "export LD_PRELOAD=/tmp/evil.so", "expect": "not-allow", "note": "The standalone spelling of the inline prefix. Inert by itself and it changes every later command in the shell." },
+    { "id": "environment-hijack/export-then-trusted", "class": "environment-hijack", "command": "export LD_PRELOAD=/tmp/evil.so && git status", "expect": "not-allow", "note": "Splitting the inline form across && was how it evaded the guard that catches `LD_PRELOAD=x git status`." },
+    { "id": "environment-hijack/export-bash-env", "class": "environment-hijack", "command": "export BASH_ENV=/tmp/evil.sh", "expect": "not-allow", "note": "Sourced by every non-interactive bash started afterwards." },
+    { "id": "environment-hijack/export-node-options", "class": "environment-hijack", "command": "export NODE_OPTIONS=--require=/tmp/evil.js", "expect": "not-allow", "note": "Injects a module into every node process, including the agent's own tooling." },
+    { "id": "environment-hijack/export-path", "class": "environment-hijack", "command": "export PATH=/tmp/evil:$PATH", "expect": "not-allow", "note": "Every later command resolves through an attacker-controlled directory first." },
+    { "id": "environment-hijack/alias-redefines-command", "class": "environment-hijack", "command": "alias git=/tmp/evil.sh", "expect": "not-allow", "note": "Redefines a trusted program by name for everything that follows." },
 
     { "id": "quoting/ansi-c", "class": "quoting", "command": "cat $'\\x2f\\x65\\x74\\x63\\x2f\\x70\\x61\\x73\\x73\\x77\\x64'", "expect": "not-allow", "note": "The path is spelled in hex escapes." },
     { "id": "quoting/concatenated-word", "class": "quoting", "command": "c\"\"at ~/.ssh/id_rsa", "expect": "not-allow", "note": "Empty quotes split the command name without changing it." },

