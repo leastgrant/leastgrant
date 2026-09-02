@@ -126,6 +126,36 @@ Claims in our docs that upstream evidence contradicts (must fix before release):
   PostToolUseFailure -> pendingById leaks.
 - mine.ts AUTO_ALLOWED has 'Task'; live payload names it 'Agent'.
 
+## LANDED SINCE (all pushed)
+- 4d5ac05 compatibility/*.json + test/compatibility.test.ts (the source of truth)
+- 454c12a untrack agent worktrees, gitignore .claude/worktrees/
+- 8433b20 doctor "what actually gets enforced, per agent", src/core/compatibility.ts
+- 9775261 website /compatibility page + site tests; facts.mjs now reads the corpus
+1365 core + 205 site tests green at 9775261.
+
+## IN FLIGHT
+- wf_5dea6e16-9ef fix campaign, 5 clusters in worktrees (shell-unwrap,
+  paths-floor, session-race, codex-wire, guards-secrets) + verifiers
+- wf_900d6002-1ad Cursor live verification + adapter/claims correction
+- wf_524764a6-4c9 Antigravity spike (assess -> build if it clears the bar)
+
+## DECIDED
+- OpenCode: DEFER, well-evidenced. permission.ask is in the types and never
+  fired by the binary (live probe). Recorded in compatibility/opencode.json.
+- Antigravity: strongest ask semantics of any agent (non-suppressible
+  force_ask). Spike running.
+
+## STILL TO DO
+- capability contract in code (.sprint/capability-contract.md, 41k) - blocked on
+  the adapter fixes landing, since it rewrites all adapters.
+- aggregation invariant (.sprint/aggregation-spec.md, 72k) - blocked likewise.
+- adapter conformance suite (§8)
+- README support table generated from compatibility/ (deferred: cursor+codex
+  fixers are both editing README right now)
+- /security/corpus website page
+- unknown-rate measurement (§17) before any tier-0 fast path
+- release
+
 ## Status
 - [x] Phase 0 recon
 - [~] Phase 1 core aggregation audit RUNNING wf_6ea7b04c-360

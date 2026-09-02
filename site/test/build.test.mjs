@@ -679,3 +679,34 @@ describe('the compatibility page tells the truth about what does not work', () =
     );
   });
 });
+
+// --- the bypass corpus page ---------------------------------------------------
+
+describe('the corpus page publishes exactly what the tests run', () => {
+  const html = () => pages.find((p) => p.file === 'security/corpus/index.html')?.html ?? '';
+  const data = () => JSON.parse(fs.readFileSync(path.join(SITE, '..', 'corpus', 'bypasses.json'), 'utf8'));
+
+  test('every case in the corpus appears on the page', () => {
+    // The claim the page makes is that these exact inputs are regression-tested.
+    // That is only true if the page shows the whole file, so a page rendering
+    // some of them would be a quiet lie rather than a rendering bug.
+    const plain = html().replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    for (const c of data().cases) {
+      assert.ok(plain.includes(c.command), `corpus case missing from the page: ${c.id}`);
+    }
+  });
+
+  test('the count in the headline is the real count', () => {
+    assert.match(html(), new RegExp(`>${data().cases.length} ways`), 'the headline count is not the corpus size');
+  });
+
+  test('it refuses the reading that this means secure', () => {
+    // The failure mode of publishing a list of defeated attacks is that readers
+    // conclude the list is exhaustive. The disclaimer is load-bearing content,
+    // not decoration, so it is asserted like content.
+    const page = html();
+    assert.match(page, /does not mean LeastGrant is secure/i);
+    assert.match(page, /nobody has thought of/i);
+  });
+});

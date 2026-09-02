@@ -31,6 +31,7 @@ import { security } from './pages/security.mjs';
 import { DOCS, docPage, docsIndex, cliPage, agentsPage } from './pages/docs.mjs';
 import { notFound } from './pages/not-found.mjs';
 import { compatibility } from './pages/compatibility.mjs';
+import { corpus } from './pages/corpus.mjs';
 import { loadCompatibility, assess } from '../dist/src/core/compatibility.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +136,7 @@ export async function build({ quiet = false } = {}) {
   emit('index.html', home(facts, verdicts), '/');
   emit('security/index.html', security(facts), '/security/');
   emit('compatibility/index.html', compatibility(facts, loadCompatibility().map(assess)), '/compatibility/');
+  emit('security/corpus/index.html', corpus(facts, JSON.parse(fs.readFileSync(path.join(REPO, 'corpus', 'bypasses.json'), 'utf8'))), '/security/corpus/');
   emit('docs/index.html', docsIndex(facts), '/docs/');
   emit('docs/cli/index.html', cliPage(facts, help), '/docs/cli/');
   emit('docs/agents/index.html', agentsPage(facts), '/docs/agents/');

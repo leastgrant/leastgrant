@@ -44,6 +44,7 @@ export function security(facts) {
     <div class="cta-row">
       <a class="btn btn-primary" href="${attr(facts.advisories)}" rel="noopener noreferrer">Open a private advisory</a>
       <a class="btn" href="/docs/security-policy/">Read the full policy</a>
+      <a class="btn" href="/security/corpus/">See the bypass corpus</a>
     </div>
     <p class="disclaimer">There is deliberately no email address. An address nobody monitors is
       worse than no address at all, and an advisory reaches the same place with a record attached.
