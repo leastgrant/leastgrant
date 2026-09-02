@@ -136,11 +136,53 @@ function scrub(a: Action, secrets: string[]): Action {
   // Templating reorders argv, so `mysql -p hunter2` becomes a signature where
   // `-p` and `hunter2` are no longer adjacent and no pattern can find them.
   for (const secret of secrets) {
-    if (signature.includes(secret)) signature = signature.split(secret).join('«redacted»');
+    signature = replaceOutsideTokens(signature, secret);
     if (display.includes(secret)) display = display.split(secret).join('«redacted»');
   }
   if (signature === a.signature && display === a.display) return a;
   return { ...a, signature, display };
+}
+
+/**
+ * Replace a secret everywhere in a signature EXCEPT inside a `<…>` token.
+ *
+ * The signature is half structure and half surviving text, and only the second
+ * half can contain a secret. A `<…>` token is something the templater derived —
+ * `<path:secret>`, `<url:api.github.com>`, `<n>` — and blanking part of one
+ * destroys a distinction the identity depends on.
+ *
+ * Which is not hypothetical. `curl -u bob:evil.example.com https://evil.example.com/p`
+ * makes the captured password equal to the hostname, so removing every literal
+ * occurrence turned `<url:evil.example.com>` into `<url:«redacted»>`. Every host
+ * spelled that way collapsed onto one signature, and eleven approvals of a host
+ * the developer trusted auto-approved a request to any other — the attacker
+ * choosing their own password to make it happen.
+ *
+ * Safe because a token's contents are categories and hostnames, not
+ * credentials: the URL templater keeps the host and discards everything else,
+ * and a host is not a secret. `display` still gets the blanket treatment, since
+ * it is prose shown to a human rather than an identity anything is keyed on.
+ */
+function replaceOutsideTokens(signature: string, secret: string): string {
+  if (!secret || !signature.includes(secret)) return signature;
+  let out = '';
+  let i = 0;
+  while (i < signature.length) {
+    const open = signature.indexOf('<', i);
+    if (open === -1) {
+      out += signature.slice(i).split(secret).join('«redacted»');
+      break;
+    }
+    const close = signature.indexOf('>', open);
+    if (close === -1) {
+      out += signature.slice(i).split(secret).join('«redacted»');
+      break;
+    }
+    out += signature.slice(i, open).split(secret).join('«redacted»');
+    out += signature.slice(open, close + 1);
+    i = close + 1;
+  }
+  return out;
 }
 
 /**
