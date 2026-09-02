@@ -72,9 +72,16 @@ function hook(agent: string, body: Record<string, unknown>): Reply {
   // Claude-shaped envelopes, so a decoder that only knew those two read every
   // Cursor reply as an abstain.
   const cursorPermission = typeof json?.['permission'] === 'string' ? (json['permission'] as string) : undefined;
+  // Antigravity's `decision`, with its two asks folded to one for comparison —
+  // `force_ask` is an ask that a cached grant cannot satisfy, and every
+  // property here cares whether a human is reached, not which of the two got
+  // them there.
+  const raw = typeof json?.['decision'] === 'string' ? (json['decision'] as string) : undefined;
+  const antigravity = raw === 'force_ask' ? 'ask' : raw;
   const decision =
     (specific?.['permissionDecision'] as string | undefined) ??
     cursorPermission ??
+    antigravity ??
     (behavior === 'allow' ? 'allow' : behavior === 'deny' ? 'deny' : undefined);
   return {
     decision: decision as Reply['decision'],
@@ -108,6 +115,20 @@ const SHAPES: Record<string, { event: string; shell: (cmd: string) => Record<str
       hook_event_name: 'PreToolUse',
       tool_name: 'shell',
       tool_input: { command: ['bash', '-lc', command] },
+    }),
+  },
+  // Antigravity nests the call under `toolCall` and carries `conversationId`.
+  // Note what is NOT here: a way to abstain. This runtime reads a missing
+  // `decision` as a deny, so the adapter always answers.
+  antigravity: {
+    event: 'PreToolUse',
+    shell: (command) => ({
+      hook_event_name: 'PreToolUse',
+      conversationId: 'conf',
+      workspacePaths: [WS],
+      executionId: 'e1',
+      toolCall: { name: 'RunCommand', args: { command } },
+      stepIdx: 1,
     }),
   },
   // Cursor's own event and payload shape: the command sits at the top level,

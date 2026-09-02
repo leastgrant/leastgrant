@@ -1,60 +1,103 @@
 {
   "id": "antigravity",
   "name": "Google Antigravity",
-  "supported": "evaluated-not-yet-shipped",
-  "adapter": null,
-  "configPath": "<repo>/.agents/hooks.json",
+  "supported": "enforcing",
+  "adapter": "src/adapters/antigravity/hook.ts",
+  "configPath": "~/.gemini/config/hooks.json (global) or <repo>/.agents/hooks.json (workspace)",
   "versionTested": "2.11.0",
   "lastVerified": "2026-09-02",
-  "osTested": ["win32"],
-  "osUntested": ["darwin", "linux"],
-
+  "osTested": [
+    "win32"
+  ],
+  "osUntested": [
+    "darwin",
+    "linux"
+  ],
   "verdicts": {
-    "allow": { "value": "honoured", "evidence": "source" },
-    "deny": {
+    "allow": {
       "value": "honoured",
       "evidence": "source",
-      "note": "Structurally mode-independent: a PreToolUse hook returning decision 'deny' hard-blocks, traced in the shipped binary."
+      "note": "Decision \"allow\" is one of six the runtime handles."
     },
     "ask": {
       "value": "honoured",
       "evidence": "source",
-      "note": "The strongest ask semantics of any agent surveyed. TWO ask verdicts: a plain `ask`, which honours a cached 'Always allow' and so can be silently satisfied, and a `force_ask` that cannot be suppressed by a prior always-allow. No other agent here ships a non-suppressible ask."
+      "note": "Two distinct asks. \"ask\" honours a cached Always-allow for the same action class; \"force_ask\" does not — EnsurePermissions never calls check() on that branch, so no prior grant and no auto-execution preset can satisfy it. LeastGrant maps a floored ask to force_ask and an unfamiliar one to ask. This is the only agent here where an ask can be made to reach a person."
+    },
+    "deny": {
+      "value": "honoured",
+      "evidence": "source",
+      "note": "Enforced in the tool-call converter (applyPreToolHooks -> PreToolHookDeniedError) before the permission manager is in the path, so it is mode-independent and applies to any tool call."
     }
   },
-
   "failure": {
     "onCrash": {
       "value": "open",
       "evidence": "source",
-      "note": "Undocumented — the public docs, the shipped hooks.md and the SDK reference all omit it. Established by reading the binary."
+      "note": "executeCommandModeHook zeroes the output slice before returning the error, so a non-zero exit discards stdout entirely — printing a correct deny and then failing is treated as a failed hook, and a failed hook fails open. The adapter therefore exits 0 on every path."
     },
-    "onTimeout": { "value": "open", "evidence": "source" },
-    "timeoutDefaultSeconds": { "value": 30, "evidence": "source", "note": "Per-handler, configurable." },
-    "canFailClosed": { "value": false, "evidence": "source" }
+    "onTimeout": {
+      "value": "open",
+      "evidence": "source",
+      "note": "Identical to a crash."
+    },
+    "timeoutDefaultSeconds": {
+      "value": 30,
+      "evidence": "source",
+      "note": "Per handler, set by the integer `timeout` field. 0 or negative silently becomes 30; there is no unlimited option."
+    },
+    "canFailClosed": {
+      "value": false,
+      "evidence": "source",
+      "note": "No per-handler fail-closed option exists. Note the inverse hazard instead: a hook that emits JSON without a `decision` field is read as a DENY, not as an abstain."
+    }
   },
-
   "interception": {
-    "shell": { "value": "gated", "evidence": "source" },
-    "fileRead": { "value": "gated", "evidence": "source" },
-    "fileWrite": { "value": "gated", "evidence": "source" },
-    "fileDelete": { "value": "gated", "evidence": "source" },
-    "mcp": { "value": "gated", "evidence": "source" },
-    "subagentSpawn": { "value": "gated", "evidence": "source" },
-    "network": { "value": "gated", "evidence": "source" },
+    "shell": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "fileRead": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "fileWrite": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "fileDelete": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "mcp": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "subagentSpawn": {
+      "value": "gated",
+      "evidence": "source"
+    },
+    "network": {
+      "value": "gated",
+      "evidence": "source"
+    },
     "note": "Unusually broad. Matcher names are derived mechanically from an internal step-type enum of roughly 115 values."
   },
-
   "observation": {
-    "postToolUse": { "value": true, "evidence": "source" },
-    "firesOnFailure": { "value": "unknown", "evidence": "unknown" },
+    "postToolUse": {
+      "value": true,
+      "evidence": "source"
+    },
+    "firesOnFailure": {
+      "value": "unknown",
+      "evidence": "unknown"
+    },
     "canModifyInput": {
       "value": true,
       "evidence": "source",
       "note": "The shipped local docs describe input rewriting; the public web docs list only decision/reason/permission and are incomplete here."
     }
   },
-
   "modes": {
     "exposesMode": {
       "value": false,
@@ -62,19 +105,23 @@
       "note": "No permission-mode field. Read from the embedded FileDescriptorProto rather than inferred from the prose docs."
     },
     "known": [],
-    "askSurvives": ["*"],
+    "askSurvives": [
+      "*"
+    ],
     "askSurvivesNote": "force_ask survives everything, which is why the mode is not needed to decide whether an ask will land."
   },
-
   "upstreamLimitations": [
-    "Fails open and silently on crash, deletion or timeout: it logs and proceeds.",
-    "A plain `ask` is satisfied by a cached 'Always allow', so only force_ask is a guaranteed prompt.",
-    "Hook config is workspace-scoped at <repo>/.agents/hooks.json, discovered by walking up from cwd. A repository can therefore ship hook configuration, which is a supply-chain surface LeastGrant's threat model does not currently cover.",
-    "CustomizationConfig carries a switch that can disable the hook engine, and LeastGrant has no way to express 'installed but switched off at the host'."
+    "The hook engine installs only when the server-delivered experiment flag json-hooks-enabled is true. It is per-session, not persisted, not readable and not overridable from the client, so LeastGrant cannot tell an enforcing session from an unenforced one.",
+    "force_ask is silently downgraded to an allow when the host sets auto_interaction_behavior=ALLOW_ALL: ResolveAutoInteraction runs before any prompt is registered and the hook gets no signal.",
+    "deny and ask do not have the same reach. deny is enforced in the converter and applies to any tool call; ask and force_ask are read only by the permissions package, which a step reaches only if it declares permission targets.",
+    "A missing or empty decision field is treated as a DENY, not as an abstain — the opposite of every other agent here. An adapter that stands aside by printing nothing would block every tool call.",
+    "A non-zero exit discards the hook output entirely, so a correct verdict followed by a failure is a failed hook, which fails open.",
+    "A repository can ship its own .agents/hooks.json, discovered by walking up from the working directory, and it runs via cmd /c with the working directory inside that repository. No workspace-trust gate was found, and Google’s own documentation encourages committing customizations to version control.",
+    "An unanswered force_ask blocks forever by default: the prompt timeout is read from config and, when absent or non-positive, no deadline is applied at all."
   ],
-
   "leastgrantLimitations": [
-    "No adapter ships yet. This file records a completed evaluation.",
-    "If an adapter is written, force_ask is the primitive that should back an abstract ASK, and it must be exposed as a capability rather than hardcoded by agent name."
+    "Contract derived from the shipped 2.11.0 Go runtime by symbolising its pclntab and reading the decision sites, not from documentation — which advertises five of the eight common payload fields and omits two of the six accepted verdicts.",
+    "Never run inside a real Antigravity session. A headless path exists and was proven to work (language_server.exe --standalone with an isolated --gemini_dir, driven over gRPC by the hidden agentapi subcommand), and it reaches the network/auth boundary; completing a model turn needs Google OAuth, which has not been done.",
+    "Verified on Windows only. The Unix launch form (sh -c) could not be read from this build: GOOS is a compile-time constant and only the Windows cmd /c path is present."
   ]
 }

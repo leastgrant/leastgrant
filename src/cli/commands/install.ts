@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { c, para, sym } from '../ui.js';
 import type { Argv } from '../index.js';
 
-export type AgentTarget = 'claude-code' | 'cursor' | 'copilot' | 'codex';
+export type AgentTarget = 'claude-code' | 'cursor' | 'copilot' | 'codex' | 'antigravity';
 
 interface Installed {
   agent: AgentTarget;
@@ -199,9 +199,15 @@ export async function installCommand(argv: Argv): Promise<number> {
   const which = (argv.positional[0] as AgentTarget | undefined) ?? 'claude-code';
   const scope: 'user' | 'project' = argv.flags['project'] ? 'project' : 'user';
 
-  if (which !== 'claude-code' && which !== 'cursor' && which !== 'copilot' && which !== 'codex') {
+  if (
+    which !== 'claude-code' &&
+    which !== 'cursor' &&
+    which !== 'copilot' &&
+    which !== 'codex' &&
+    which !== 'antigravity'
+  ) {
     process.stderr.write(
-      `\n  ${c.red('Unknown agent')} ${which}\n  ${c.gray('Supported: claude-code, cursor, copilot, codex')}\n\n`,
+      `\n  ${c.red('Unknown agent')} ${which}\n  ${c.gray('Supported: claude-code, cursor, copilot, codex, antigravity')}\n\n`,
     );
     return 2;
   }
@@ -215,7 +221,9 @@ export async function installCommand(argv: Argv): Promise<number> {
           ? copilot(scope, uninstall)
           : which === 'codex'
             ? codex(scope, uninstall)
-            : claudeCode(scope, uninstall);
+            : which === 'antigravity'
+              ? antigravity(scope, uninstall)
+              : claudeCode(scope, uninstall);
   } catch (err) {
     process.stderr.write(`\n  ${c.red('Could not update the settings file.')} ${(err as Error).message}\n\n`);
     return 1;
@@ -682,4 +690,94 @@ export function isClaudeInstalled(scope: 'user' | 'project'): boolean {
   })();
   const pre = settings?.hooks?.['PreToolUse'] ?? [];
   return pre.some((m) => (m.hooks ?? []).some((h) => isOurs(h.command)));
+}
+
+/**
+ * Antigravity's hook config.
+ *
+ * `~/.gemini/config/hooks.json` globally, or `<repo>/.agents/hooks.json` for a
+ * workspace. The top level is a map of hook NAME to spec, and the event keys
+ * are the exact-cased Go field names — `PreToolUse`, not `preToolUse`.
+ *
+ * The command is run through `cmd /c` on Windows with the working directory set
+ * to the directory containing hooks.json, so the first token has the same
+ * quoting problem Codex and Copilot had and gets the same answer: a space-free
+ * absolute path via `nodeInvocation()`.
+ *
+ * A timeout is written explicitly. The default is 30 seconds and a hook that
+ * overruns it is a failed hook, which fails open — 10 matches what the other
+ * adapters ask for and leaves a wide margin over a p95 of about 100ms.
+ */
+function antigravity(scope: 'user' | 'project', uninstall: boolean): Installed {
+  const dir =
+    scope === 'user'
+      ? path.join(os.homedir(), '.gemini', 'config')
+      : path.join(process.cwd(), '.agents');
+  const file = path.join(dir, 'hooks.json');
+  const command = `${selfCommand()} --agent antigravity`;
+
+  interface Handler { command?: string; timeout?: number; [k: string]: unknown }
+  interface Group { matcher?: string; hooks?: Handler[] }
+  interface Spec { enabled?: boolean; PreToolUse?: Group[]; PostToolUse?: Group[]; [k: string]: unknown }
+
+  const cfg = readJson<Record<string, Spec>>(file) ?? {};
+  const spec: Spec = (cfg['leastgrant'] as Spec | undefined) ?? {};
+  let changed = false;
+
+  for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+    const groups: Group[] = (spec[event] as Group[] | undefined) ?? [];
+    // One group matching every tool. `*` is the documented catch-all and the
+    // only honest choice: a matcher listing tool names would silently stop
+    // covering whatever Antigravity adds next.
+    let group = groups.find((g) => g.matcher === '*');
+    if (uninstall) {
+      for (const g of groups) {
+        const before = (g.hooks ?? []).length;
+        g.hooks = (g.hooks ?? []).filter((h) => !isOurs(String(h.command ?? '')));
+        if ((g.hooks ?? []).length !== before) changed = true;
+      }
+      const kept = groups.filter((g) => (g.hooks ?? []).length > 0);
+      if (kept.length) spec[event] = kept;
+      else delete spec[event];
+      continue;
+    }
+    if (!group) {
+      group = { matcher: '*', hooks: [] };
+      groups.push(group);
+    }
+    group.hooks ??= [];
+    const idx = group.hooks.findIndex((h) => isOurs(String(h.command ?? '')));
+    if (idx < 0) {
+      group.hooks.push({ command, timeout: 10 });
+      changed = true;
+    } else if (group.hooks[idx]!.command !== command) {
+      // Same refresh the other installers do: an entry of ours that names a
+      // stale path is worse than none, because it looks installed.
+      group.hooks[idx] = { ...group.hooks[idx], command, timeout: 10 };
+      changed = true;
+    }
+    spec[event] = groups;
+  }
+
+  if (uninstall) {
+    if (!spec['PreToolUse'] && !spec['PostToolUse']) delete cfg['leastgrant'];
+    else cfg['leastgrant'] = spec;
+  } else {
+    cfg['leastgrant'] = spec;
+  }
+
+  if (changed) {
+    fs.mkdirSync(dir, { recursive: true });
+    writeJsonPreservingStyle(file, cfg);
+  }
+
+  return {
+    agent: 'antigravity',
+    scope,
+    file,
+    changed,
+    note: uninstall
+      ? undefined
+      : 'Antigravity is the one agent where LeastGrant can insist on a human: a floored ask becomes force_ask, which no cached "Always allow" can satisfy. Deny is enforced in the tool-call converter, so it holds in every mode. Two host-side switches can disable enforcement without telling anyone — the server experiment flag json-hooks-enabled, and auto_interaction_behavior=ALLOW_ALL.',
+  } as Installed;
 }

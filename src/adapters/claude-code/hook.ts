@@ -130,6 +130,32 @@ export async function runHook(): Promise<void> {
       process.exit(0);
     }
 
+    // Antigravity before Claude Code, for the same reason and a sharper one.
+    //
+    // It shares the `PreToolUse` / `PostToolUse` names too, and getting this
+    // wrong is worse here than anywhere else: Antigravity reads a *missing*
+    // decision as a DENY. The Claude Code renderer's way of standing aside is
+    // to print nothing, so a misrouted Antigravity call would not fail open,
+    // it would block — every tool call, until someone worked out why.
+    //
+    // The payloads cannot be confused. Antigravity nests the call under
+    // `toolCall` and carries `conversationId`; Claude Code has flat
+    // `tool_name` / `tool_input`.
+    const { isAntigravityEvent, looksLikeAntigravity, runAntigravityHook } = await import(
+      '../antigravity/hook.js'
+    );
+    const flaggedAntigravity = agentFlag() === 'antigravity';
+    if (
+      isAntigravityEvent(String(input.hook_event_name ?? '')) &&
+      (flaggedAntigravity || looksLikeAntigravity(input))
+    ) {
+      if (!flaggedAntigravity) {
+        logLine('antigravity: routed by payload shape, not by --agent antigravity');
+      }
+      runAntigravityHook(input);
+      process.exit(0);
+    }
+
     // Matched case-insensitively. The event name is chosen by the agent, not
     // by an attacker, so this is not a security boundary — but a client that
     // spelled it `pretooluse` would silently turn LeastGrant off, and going
