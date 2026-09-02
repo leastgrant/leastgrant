@@ -22,7 +22,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadCompatibility } from '../dist/src/core/compatibility.js';
+import { loadCompatibility, assess } from '../dist/src/core/compatibility.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const README = path.join(ROOT, 'README.md');
@@ -42,6 +42,13 @@ const VERDICT = {
 /**
  * Status words, deliberately unstyled.
  *
+ * Keyed by the DERIVED enforcement level from `assess()`, not by the declared
+ * `supported` string. The two disagreed: the record said Antigravity was
+ * `enforcing` while the website, which already used assess(), said
+ * `unverified` — both from the same file, via different fields. Declaring a
+ * level is a claim; deriving it from the evidence grades is a measurement, and
+ * the whole point of one source is that every surface reaches the same answer.
+ *
  * They are compared verbatim against the rendered site by
  * `site/test/build.test.mjs`, which asserts that whatever status the README
  * gives an agent is the status a visitor sees. Markdown emphasis here would
@@ -51,8 +58,8 @@ const VERDICT = {
 const STATUS = {
   enforcing: 'Enforcing',
   partial: 'Partial',
-  'evaluated-not-yet-shipped': 'Evaluated, no adapter',
-  'evaluated-and-deferred': 'Evaluated, deferred',
+  degraded: 'Veto only',
+  unverified: 'Unverified',
   none: 'Not yet',
 };
 
@@ -66,7 +73,8 @@ export function render() {
 
   const rows = shipped.map((a) => {
     const crash = value(a, 'failure', 'onCrash');
-    return `| **${a.name}** | ${STATUS[a.supported] ?? a.supported} | ${cell(value(a, 'verdicts', 'allow'))} | ${cell(value(a, 'verdicts', 'ask'))} | ${cell(value(a, 'verdicts', 'deny'))} | ${crash === 'closed' ? 'refuses' : crash === 'open' ? 'runs anyway' : '?'} | ${a.versionTested ?? '—'}${(a.osTested ?? []).length ? ` on ${a.osTested.join(', ')}` : ', not run live'} |`;
+    const level = assess(a).level;
+    return `| **${a.name}** | ${STATUS[level] ?? level} | ${cell(value(a, 'verdicts', 'allow'))} | ${cell(value(a, 'verdicts', 'ask'))} | ${cell(value(a, 'verdicts', 'deny'))} | ${crash === 'closed' ? 'refuses' : crash === 'open' ? 'runs anyway' : '?'} | ${a.versionTested ?? '—'}${(a.osTested ?? []).length ? ` on ${a.osTested.join(', ')}` : ', not run live'} |`;
   });
 
   const out = [
@@ -99,7 +107,7 @@ export function render() {
     out.push('**Looked at, no adapter shipped.**');
     out.push('');
     for (const a of evaluated) {
-      const why = a.deferredBecause ?? a.$comment ?? `${STATUS[a.supported] ?? a.supported}.`;
+      const why = a.deferredBecause ?? a.$comment ?? `${STATUS[assess(a).level] ?? assess(a).level}.`;
       out.push(`- **${a.name}** (${a.versionTested ?? 'version not recorded'}). ${why}`);
     }
   }

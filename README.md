@@ -392,11 +392,11 @@ would have let through.
 
 | Agent | Status | allow | ask | deny | if the hook breaks | verified against |
 |---|---|---|---|---|---|---|
-| **Claude Code** | Enforcing | yes | degrades | yes | runs anyway | 2.1.240 on win32 |
-| **Codex CLI** | Enforcing | ignored | no | yes | runs anyway | 0.152.0 on win32 |
-| **Cursor** | Partial | yes | partial | yes | refuses | 3.18.25 on win32 |
-| **GitHub Copilot CLI** | Enforcing | yes | degrades | yes | refuses | 1.0.82 on win32 |
-| **Google Antigravity** | Enforcing | yes | yes | yes | runs anyway | 2.11.0 on win32 |
+| **Claude Code** | Partial | yes | degrades | yes | runs anyway | 2.1.240 on win32 |
+| **Codex CLI** | Veto only | ignored | no | yes | runs anyway | 0.152.0 on win32 |
+| **Cursor** | Unverified | yes | partial | yes | refuses | 3.18.25 on win32 |
+| **GitHub Copilot CLI** | Partial | yes | degrades | yes | refuses | 1.0.82 on win32 |
+| **Google Antigravity** | Unverified | yes | yes | yes | runs anyway | 2.11.0 on win32 |
 
 `ask` is the column that matters and the one that differs most. `yes` means a
 prompt reaches a person. `degrades` means it reaches them where a prompt
