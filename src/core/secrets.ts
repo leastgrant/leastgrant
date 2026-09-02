@@ -441,8 +441,22 @@ const RULES: RedactRule[] = [
   // the same action.
   { rx: /((?:^|\s)(?:-u|--user)\s+[^\s:'"]+:)([^\s'"]+)/g, label: 'basic-auth' },
   // NAME=VALUE where NAME smells like a credential.
+  //
+  // The value must not already be a marker. This rule is broad by design and
+  // runs after the specific ones, so without that guard it re-redacts what they
+  // produced: `TOKEN=xoxb-…` becomes `«redacted:slack-token»` and then
+  // `«redacted:env-secret»`, losing the label that told the human which kind of
+  // credential it was. `--password=…` lost `flag-value` the same way.
+  //
+  // The prefix is optional, and it used to be mandatory: `[A-Za-z_]` had to
+  // consume a character before the credential word could start matching, so
+  // `DB_PASSWORD=` and `MY_TOKEN=` were caught while the bare spellings —
+  // `PASSWORD=`, `TOKEN=`, `SECRET=`, `API_KEY=` — could never match at all.
+  // Those are the most common forms there are, and the value went into
+  // ledger.jsonl, the envelope, and denials.jsonl, which is append-only and by
+  // design never pruned, so it outlived every other copy.
   {
-    rx: /\b([A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?|AUTH)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/gi,
+    rx: /\b((?:[A-Za-z_][A-Za-z0-9_]*)?(?:TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?|AUTH)[A-Za-z0-9_]*)=(?![\u00ab<])("[^"]*"|'[^']*'|\S+)/gi,
     label: 'env-secret',
   },
 ];

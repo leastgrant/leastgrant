@@ -82,8 +82,31 @@ export function loadConfig(): Config {
       secretPatterns: parsed.secretPatterns ?? [],
       telemetry: { ...DEFAULT_CONFIG.telemetry, ...(parsed.telemetry ?? {}) },
     };
-  } catch {
-    return { ...DEFAULT_CONFIG, thresholds: { ...DEFAULT_THRESHOLDS }, rules: [] };
+  } catch (err) {
+    // "There is no config yet" and "your config is unreadable" are not the same
+    // situation and used to get the same answer.
+    //
+    // A first run has no file, and the defaults are exactly right for it. A file
+    // that exists and will not parse is a different thing entirely: whatever
+    // deny rules and whatever posture the human chose are still on disk, and we
+    // cannot read them. Returning the defaults there silently discarded their
+    // rules and landed on `assist`, which auto-approves familiar work — quite
+    // possibly *more* permissive than what they had configured, arrived at by
+    // an error nobody was told about.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { ...DEFAULT_CONFIG, thresholds: { ...DEFAULT_THRESHOLDS }, rules: [] };
+    }
+
+    // Fail towards asking. `strict` approves only what an explicit rule allows,
+    // and we have no rules, so everything asks. That is disruptive on purpose:
+    // it cannot be quieter than the configuration it is standing in for, and it
+    // is impossible not to notice, which a corrupt config file deserves.
+    process.stderr.write(
+      `LeastGrant: ${paths.config()} could not be read (${(err as Error)?.message ?? 'unknown error'}).\n` +
+        `  Your rules and posture are not being applied. Asking about everything until it is fixed.\n`,
+    );
+    logLine(`config-unreadable ${paths.config()}: ${String((err as Error)?.message ?? err)}`);
+    return { ...DEFAULT_CONFIG, posture: 'strict', thresholds: { ...DEFAULT_THRESHOLDS }, rules: [] };
   }
 }
 
