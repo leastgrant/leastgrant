@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\PROGRA~1\\nodejs\\node.exe D:\\LeastGrant\\bin\\leastgrant.js hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\PROGRA~1\\nodejs\\node.exe D:\\LeastGrant\\bin\\leastgrant.js hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

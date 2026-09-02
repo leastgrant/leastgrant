@@ -1,0 +1,75 @@
+{
+  "id": "claude-code",
+  "name": "Claude Code",
+  "supported": "enforcing",
+  "adapter": "src/adapters/claude-code/hook.ts",
+  "configPath": "~/.claude/settings.json",
+  "versionTested": "2.1.240",
+  "lastVerified": "2026-09-02",
+  "osTested": ["win32"],
+  "osUntested": ["darwin", "linux"],
+
+  "verdicts": {
+    "allow": { "value": "honoured", "evidence": "probe", "note": "hookSpecificOutput.permissionDecision" },
+    "deny": {
+      "value": "honoured",
+      "evidence": "probe",
+      "note": "Two channels: permissionDecision 'deny' and exit code 2. Honoured in the most permissive mode."
+    },
+    "ask": {
+      "value": "degrades",
+      "evidence": "probe",
+      "note": "Reaches a human when a human is there. In non-interactive mode (claude -p) a hook ask becomes a DENY. The README claimed an ask reaches you in every mode; probing showed otherwise."
+    }
+  },
+
+  "failure": {
+    "onCrash": { "value": "open", "evidence": "probe", "note": "Measured: hook exits 1 with non-JSON stdout, the tool ran and permission_denials was empty." },
+    "onTimeout": { "value": "open", "evidence": "probe", "note": "Measured: timeout 2 against an 8s hook, the tool ran and the deny was discarded." },
+    "timeoutDefaultSeconds": { "value": 600, "evidence": "source", "note": "The installer pins 10." },
+    "canFailClosed": { "value": false, "evidence": "source", "note": "No per-hook fail-closed option." }
+  },
+
+  "interception": {
+    "shell": { "value": "gated", "evidence": "probe" },
+    "fileRead": { "value": "gated", "evidence": "probe" },
+    "fileWrite": { "value": "gated", "evidence": "probe" },
+    "fileDelete": { "value": "gated", "evidence": "probe" },
+    "mcp": { "value": "gated", "evidence": "probe" },
+    "subagentSpawn": {
+      "value": "gated",
+      "evidence": "probe",
+      "note": "The model emits `Task`; the payload and matchers see `Agent`, because toolAliases resolves the name before hooks run."
+    },
+    "network": { "value": "gated", "evidence": "source", "note": "WebFetch/WebSearch are ordinary tools." }
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "probe" },
+    "firesOnFailure": {
+      "value": false,
+      "evidence": "source",
+      "note": "A failed call fires PostToolUseFailure, which the installer does not register, so those calls never reach recordPost."
+    },
+    "canModifyInput": { "value": true, "evidence": "source", "note": "updatedInput is supported upstream; LeastGrant does not use it." }
+  },
+
+  "modes": {
+    "exposesMode": { "value": true, "evidence": "probe", "note": "permission_mode, optional, top-level." },
+    "known": ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"],
+    "askSurvives": ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"],
+    "askSurvivesNote": "Interactively. Non-interactive (-p) turns any hook ask into a deny regardless of mode."
+  },
+
+  "upstreamLimitations": [
+    "Managed policy `disableAllHooks: true` switches every hook off, including managed ones, with no signal LeastGrant can see. It is silently absent.",
+    "Fails open on crash and on timeout, so a LeastGrant that cannot start enforces nothing.",
+    "A hook ask in non-interactive mode is a deny, not a prompt.",
+    "The public docs list PreModelSwitch and PostModelSwitch, which do not exist in the installed 2.1.240 binary."
+  ],
+
+  "leastgrantLimitations": [
+    "Only PreToolUse and PostToolUse are registered, so failed calls are never observed and their pending entries are never resolved.",
+    "Verified on Windows only. macOS and Linux run the same code path but nobody has driven the real binary there."
+  ]
+}

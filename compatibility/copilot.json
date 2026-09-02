@@ -1,0 +1,71 @@
+{
+  "id": "copilot",
+  "name": "GitHub Copilot CLI",
+  "supported": "enforcing",
+  "adapter": "src/adapters/claude-code/hook.ts",
+  "configPath": "~/.copilot/hooks/leastgrant.json",
+  "versionTested": "1.0.82",
+  "lastVerified": "2026-09-01",
+  "osTested": ["win32"],
+  "osUntested": ["darwin", "linux"],
+
+  "$comment": "The dedicated upstream research pass for Copilot did not complete (the run hit a provider budget limit), so unlike the other files here this one is not backed by a fresh binary read. Everything below comes from the earlier live `copilot -p` verification. Fields nobody re-checked are marked unknown rather than carried over on trust.",
+
+  "verdicts": {
+    "allow": { "value": "honoured", "evidence": "probe" },
+    "deny": { "value": "honoured", "evidence": "probe" },
+    "ask": {
+      "value": "degrades",
+      "evidence": "probe",
+      "note": "Honoured interactively. A non-interactive run (copilot -p) has nobody to ask and Copilot turns an ask into a deny — its choice, not LeastGrant's, and the safe direction."
+    }
+  },
+
+  "failure": {
+    "onCrash": {
+      "value": "closed",
+      "evidence": "probe",
+      "note": "The only agent here that fails closed: if the hook errors, Copilot denies the call rather than running it. Discovered the hard way — a broken hook command blocked everything."
+    },
+    "onTimeout": { "value": "unknown", "evidence": "unknown" },
+    "timeoutDefaultSeconds": { "value": null, "evidence": "unknown" },
+    "canFailClosed": { "value": true, "evidence": "probe", "note": "It is the default and is not optional." }
+  },
+
+  "interception": {
+    "shell": { "value": "gated", "evidence": "probe" },
+    "fileRead": { "value": "gated", "evidence": "probe" },
+    "fileWrite": { "value": "gated", "evidence": "probe" },
+    "fileDelete": { "value": "unknown", "evidence": "unknown" },
+    "mcp": { "value": "unknown", "evidence": "unknown" },
+    "subagentSpawn": { "value": "unknown", "evidence": "unknown" },
+    "network": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "probe" },
+    "firesOnFailure": { "value": "unknown", "evidence": "unknown" },
+    "canModifyInput": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "modes": {
+    "exposesMode": {
+      "value": false,
+      "evidence": "probe",
+      "note": "No permission_mode field at all. This is why the attended check is an allowlist: treating an absent mode as `default` banked every completed Copilot call as a human approval."
+    },
+    "known": [],
+    "askSurvives": []
+  },
+
+  "upstreamLimitations": [
+    "No permission mode is sent, so LeastGrant cannot tell an attended run from an unattended one and records observation rather than approval. Copilot therefore learns more slowly, deliberately.",
+    "Failing closed means a broken or missing LeastGrant blocks all work rather than silently permitting it. Safer, and much louder."
+  ],
+
+  "leastgrantLimitations": [
+    "Speaks Claude Code's wire format, so it shares that adapter. A divergence upstream would surface as Copilot-shaped bugs in a file named for Claude.",
+    "This file's unknown fields need a dedicated binary read; the research pass for it did not complete.",
+    "Verified on Windows only."
+  ]
+}

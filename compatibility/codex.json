@@ -1,0 +1,78 @@
+{
+  "id": "codex",
+  "name": "Codex CLI",
+  "supported": "enforcing",
+  "adapter": "src/adapters/codex/hook.ts",
+  "configPath": "~/.codex/hooks.json",
+  "versionTested": "0.152.0",
+  "lastVerified": "2026-09-02",
+  "osTested": ["win32"],
+  "osUntested": ["darwin", "linux"],
+
+  "verdicts": {
+    "allow": {
+      "value": "ignored",
+      "evidence": "source",
+      "note": "Only deny is enforced on PreToolUse. An allow is accepted and changes nothing — the call proceeds to Codex's own approval logic. Allow is only enforced on PermissionRequest."
+    },
+    "deny": {
+      "value": "honoured",
+      "evidence": "probe",
+      "note": "Works in every mode including --dangerously-bypass-approvals-and-sandbox. A deny with a blank reason is rejected as invalid, so the reason string is load-bearing."
+    },
+    "ask": {
+      "value": "unsupported",
+      "evidence": "source",
+      "note": "There is no ask verdict in any mode. On PreToolUse, permissionDecision 'ask' is parsed, rejected as invalid, and the call then runs anyway. LeastGrant converts a floored ask into a deny where no human can be reached."
+    }
+  },
+
+  "failure": {
+    "onCrash": { "value": "open", "evidence": "source", "note": "Every failure path sets HookRunStatus::Failed and leaves the call to proceed." },
+    "onTimeout": { "value": "open", "evidence": "source" },
+    "timeoutDefaultSeconds": { "value": 600, "evidence": "source", "note": "SessionEnd and Interrupt default to 1s and are hard-clamped." },
+    "canFailClosed": { "value": false, "evidence": "source" }
+  },
+
+  "interception": {
+    "shell": { "value": "gated", "evidence": "probe" },
+    "fileRead": { "value": "gated", "evidence": "probe" },
+    "fileWrite": { "value": "gated", "evidence": "probe" },
+    "fileDelete": { "value": "gated", "evidence": "source" },
+    "mcp": { "value": "gated", "evidence": "source" },
+    "subagentSpawn": { "value": "unknown", "evidence": "unknown" },
+    "network": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "source" },
+    "firesOnFailure": {
+      "value": false,
+      "evidence": "source",
+      "note": "PostToolUse fires only when the tool call succeeded (`if success` in the registry), so LeastGrant never observes a failed call and cannot learn that something was refused."
+    },
+    "canModifyInput": { "value": true, "evidence": "source", "note": "updatedInput on PreToolUse, last handler to complete wins. LeastGrant does not use it." }
+  },
+
+  "modes": {
+    "exposesMode": { "value": true, "evidence": "source", "note": "permission_mode, required, top-level." },
+    "known": ["default", "dontAsk", "bypassPermissions"],
+    "askSurvives": [],
+    "askSurvivesNote": "Nothing. permission_mode is derived only from the approval policy and never from the sandbox mode, so `default` does not imply a human will be asked. `codex exec` hard-sets the policy to Never."
+  },
+
+  "upstreamLimitations": [
+    "No ask verdict exists at all. On Codex, LeastGrant is a veto rather than a prompt.",
+    "A handler declared `\"async\": true` cannot apply control effects: its deny, its exit-2 block and its updatedInput are all silently ignored. A single wrong word in the config is a total, unsignalled bypass.",
+    "Hook trust is bound to a hash of the definition, so upgrading or reinstalling re-flags the hook and it stops running until re-trusted in /hooks.",
+    "On Windows the trust hash covers only `commandWindows` and on POSIX only `command`, so one hooks.json has different hashes on different machines.",
+    "`codex exec` has no trust review and no warning: an untrusted or modified handler is simply never added to the handler set, and nothing says so.",
+    "Fails open on crash and on timeout.",
+    "`[features] hooks = false` and `allow_managed_hooks_only = true` disable user hooks entirely."
+  ],
+
+  "leastgrantLimitations": [
+    "PermissionRequest has never fired in a real session. `codex exec` runs unattended, where by definition nothing prompts, so that path is contract-tested only.",
+    "Verified on Windows only."
+  ]
+}

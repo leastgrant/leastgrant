@@ -1,0 +1,87 @@
+{
+  "id": "cursor",
+  "name": "Cursor",
+  "supported": "partial",
+  "adapter": "src/adapters/cursor/hook.ts",
+  "configPath": "~/.cursor/hooks.json",
+  "versionTested": "3.18.25",
+  "lastVerified": "2026-09-02",
+  "osTested": [],
+  "osUntested": ["win32", "darwin", "linux"],
+
+  "$comment": "osTested is deliberately empty. Cursor 3.18.25 is installed on the machine this was written on and its shipped bundle was read directly, which is why the grades below are `source` rather than `docs` — but nobody has yet driven LeastGrant inside a running Cursor session. Reading the binary is strong evidence about the contract and no evidence at all about the integration. That distinction is the whole reason this file separates `source` from `probe`.",
+
+  "verdicts": {
+    "allow": { "value": "honoured", "evidence": "source" },
+    "deny": {
+      "value": "honoured",
+      "evidence": "source",
+      "note": "Accepted on beforeShellExecution, beforeMCPExecution, beforeReadFile, beforeTabFileRead and the subagent events, and it beats the most permissive approval mode."
+    },
+    "ask": {
+      "value": "partial",
+      "evidence": "source",
+      "note": "A real forced prompt on beforeShellExecution and beforeMCPExecution only, and there it beats the most permissive mode. On every other event there is no ask: on preToolUse an ask does not degrade quietly, it rejects the tool call outright with an error."
+    }
+  },
+
+  "failure": {
+    "onCrash": {
+      "value": "unknown",
+      "evidence": "unknown",
+      "note": "Cursor's own documentation says fail-open by default. Reading the 3.18.25 bundle indicates it depends on the failure kind — exit 0 with valid JSON is honoured, and other paths differ. Recorded as unknown until someone establishes each path, because a blanket answer here would be a guess about the single most important field in this file."
+    },
+    "onTimeout": { "value": "unknown", "evidence": "unknown" },
+    "timeoutDefaultSeconds": { "value": 60, "evidence": "source", "note": "Per-script `timeout` in seconds; a warning is emitted above 3600." },
+    "canFailClosed": {
+      "value": true,
+      "evidence": "source",
+      "note": "A per-script `failClosed: true` option exists. LeastGrant's installer writes a bare {command} and therefore does not use it."
+    }
+  },
+
+  "interception": {
+    "shell": { "value": "gated", "evidence": "source" },
+    "fileRead": {
+      "value": "observed",
+      "evidence": "source",
+      "note": "Not a gate. beforeReadFile is fired from the Read tool's post-execution path with the file content already loaded, so a credential read has happened by the time LeastGrant sees it. A deny suppresses the content reaching the model; it does not prevent the read."
+    },
+    "fileWrite": { "value": "none", "evidence": "source", "note": "There is no before-write event. Writes are not intercepted." },
+    "fileDelete": { "value": "none", "evidence": "source" },
+    "mcp": { "value": "gated", "evidence": "source" },
+    "subagentSpawn": { "value": "gated", "evidence": "source" },
+    "network": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "source", "note": "postToolUse, afterShellExecution, afterMCPExecution, afterFileEdit and others." },
+    "firesOnFailure": { "value": true, "evidence": "source", "note": "postToolUseFailure exists." },
+    "canModifyInput": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "modes": {
+    "exposesMode": {
+      "value": false,
+      "evidence": "source",
+      "note": "No approval-mode field in any hook payload, although Cursor does have approvalMode internally (allowlist, unrestricted, auto-review)."
+    },
+    "known": [],
+    "askSurvives": ["*"],
+    "askSurvivesNote": "On the two events that support it, an ask beats even the most permissive approval mode."
+  },
+
+  "upstreamLimitations": [
+    "File reads are observed after the fact, not gated. A deny stops the content reaching the model but the file has already been read.",
+    "Writes, edits and deletes have no pre-execution event and are not intercepted at all.",
+    "An ask on preToolUse is rejected as unsupported and the tool call errors, which is neither a prompt nor a clean degradation.",
+    "No permission mode reaches the hook, so LeastGrant cannot tell an attended session from an unattended one.",
+    "Cursor also ingests Claude Code hooks from .claude/settings.json and ~/.claude/settings.json, so installing both adapters may double-fire."
+  ],
+
+  "leastgrantLimitations": [
+    "Never run inside a live Cursor session. The contract is verified against the shipped 3.18.25 bundle; the integration is not verified at all.",
+    "The installer does not set failClosed, so LeastGrant fails open on its own crash where Cursor would allow it to fail closed.",
+    "Reads and MCP calls are covered; writes are not, so the support level is partial rather than enforcing."
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "id": "antigravity",
+  "name": "Google Antigravity",
+  "supported": "evaluated-not-yet-shipped",
+  "adapter": null,
+  "configPath": "<repo>/.agents/hooks.json",
+  "versionTested": "2.11.0",
+  "lastVerified": "2026-09-02",
+  "osTested": ["win32"],
+  "osUntested": ["darwin", "linux"],
+
+  "verdicts": {
+    "allow": { "value": "honoured", "evidence": "source" },
+    "deny": {
+      "value": "honoured",
+      "evidence": "source",
+      "note": "Structurally mode-independent: a PreToolUse hook returning decision 'deny' hard-blocks, traced in the shipped binary."
+    },
+    "ask": {
+      "value": "honoured",
+      "evidence": "source",
+      "note": "The strongest ask semantics of any agent surveyed. TWO ask verdicts: a plain `ask`, which honours a cached 'Always allow' and so can be silently satisfied, and a `force_ask` that cannot be suppressed by a prior always-allow. No other agent here ships a non-suppressible ask."
+    }
+  },
+
+  "failure": {
+    "onCrash": {
+      "value": "open",
+      "evidence": "source",
+      "note": "Undocumented — the public docs, the shipped hooks.md and the SDK reference all omit it. Established by reading the binary."
+    },
+    "onTimeout": { "value": "open", "evidence": "source" },
+    "timeoutDefaultSeconds": { "value": 30, "evidence": "source", "note": "Per-handler, configurable." },
+    "canFailClosed": { "value": false, "evidence": "source" }
+  },
+
+  "interception": {
+    "shell": { "value": "gated", "evidence": "source" },
+    "fileRead": { "value": "gated", "evidence": "source" },
+    "fileWrite": { "value": "gated", "evidence": "source" },
+    "fileDelete": { "value": "gated", "evidence": "source" },
+    "mcp": { "value": "gated", "evidence": "source" },
+    "subagentSpawn": { "value": "gated", "evidence": "source" },
+    "network": { "value": "gated", "evidence": "source" },
+    "note": "Unusually broad. Matcher names are derived mechanically from an internal step-type enum of roughly 115 values."
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "source" },
+    "firesOnFailure": { "value": "unknown", "evidence": "unknown" },
+    "canModifyInput": {
+      "value": true,
+      "evidence": "source",
+      "note": "The shipped local docs describe input rewriting; the public web docs list only decision/reason/permission and are incomplete here."
+    }
+  },
+
+  "modes": {
+    "exposesMode": {
+      "value": false,
+      "evidence": "source",
+      "note": "No permission-mode field. Read from the embedded FileDescriptorProto rather than inferred from the prose docs."
+    },
+    "known": [],
+    "askSurvives": ["*"],
+    "askSurvivesNote": "force_ask survives everything, which is why the mode is not needed to decide whether an ask will land."
+  },
+
+  "upstreamLimitations": [
+    "Fails open and silently on crash, deletion or timeout: it logs and proceeds.",
+    "A plain `ask` is satisfied by a cached 'Always allow', so only force_ask is a guaranteed prompt.",
+    "Hook config is workspace-scoped at <repo>/.agents/hooks.json, discovered by walking up from cwd. A repository can therefore ship hook configuration, which is a supply-chain surface LeastGrant's threat model does not currently cover.",
+    "CustomizationConfig carries a switch that can disable the hook engine, and LeastGrant has no way to express 'installed but switched off at the host'."
+  ],
+
+  "leastgrantLimitations": [
+    "No adapter ships yet. This file records a completed evaluation.",
+    "If an adapter is written, force_ask is the primitive that should back an abstract ASK, and it must be exposed as a capability rather than hardcoded by agent name."
+  ]
+}

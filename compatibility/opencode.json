@@ -1,0 +1,85 @@
+{
+  "id": "opencode",
+  "name": "OpenCode",
+  "supported": "evaluated-and-deferred",
+  "adapter": null,
+  "configPath": "~/.config/opencode/opencode.json",
+  "versionTested": "1.18.26",
+  "lastVerified": "2026-09-02",
+  "osTested": ["win32"],
+  "osUntested": ["darwin", "linux"],
+
+  "deferredBecause": "The hook that looks like the right surface does not work. `permission.ask` is declared in the shipped plugin types and is never fired by the shipped binary — confirmed by live probe: a plugin exporting it, returning deny, against a real permission request, was never called. Everything else on offer is either an observation point that cannot veto, or a config ruleset evaluated before any plugin sees it. An adapter built on this could not honestly claim to enforce.",
+
+  "verdicts": {
+    "allow": { "value": "unsupported", "evidence": "probe", "note": "No plugin-facing verdict API that reaches the permission engine." },
+    "deny": {
+      "value": "partial",
+      "evidence": "probe",
+      "note": "Two routes work, neither is a hook verdict: a config ruleset deny (evaluated before any event is published, so static, not per-call) and throwing from tool.execute.before. Both hold under yolo."
+    },
+    "ask": {
+      "value": "unsupported",
+      "evidence": "probe",
+      "note": "A plugin cannot originate an ask. There is no API to raise a prompt from event, config, or tool.execute.before."
+    }
+  },
+
+  "failure": {
+    "onCrash": {
+      "value": "open",
+      "evidence": "probe",
+      "note": "Depends where it crashes, and the case that matters fails open: a plugin that fails to load — module throws, bad export, failed npm install — is silently skipped and the agent then runs unpoliced with no visible warning."
+    },
+    "onTimeout": {
+      "value": "none",
+      "evidence": "probe",
+      "note": "There is no timeout and none is configurable. Plugin.trigger awaits each hook serially with no deadline, so a hung hook hangs the agent indefinitely. Verified live."
+    },
+    "timeoutDefaultSeconds": null,
+    "canFailClosed": { "value": false, "evidence": "probe" }
+  },
+
+  "interception": {
+    "shell": {
+      "value": "partial",
+      "evidence": "probe",
+      "note": "tool.execute.before covers model-invoked tools, but POST /session/{id}/shell executes a shell command with no permission check and no event at all. Verified live against a config that denied `rm *`."
+    },
+    "fileRead": { "value": "observed", "evidence": "source" },
+    "fileWrite": { "value": "observed", "evidence": "source" },
+    "fileDelete": { "value": "observed", "evidence": "source" },
+    "mcp": { "value": "observed", "evidence": "source" },
+    "subagentSpawn": { "value": "unknown", "evidence": "unknown" },
+    "network": { "value": "unknown", "evidence": "unknown" }
+  },
+
+  "observation": {
+    "postToolUse": { "value": true, "evidence": "source", "note": "tool.execute.after." },
+    "firesOnFailure": { "value": "unknown", "evidence": "unknown" },
+    "canModifyInput": {
+      "value": true,
+      "evidence": "probe",
+      "note": "Mutating output.args in place rewrites what executes AND what the permission engine then evaluates — which is a capability and a hazard, since it lets a plugin launder a command past the ruleset."
+    }
+  },
+
+  "modes": {
+    "exposesMode": { "value": false, "evidence": "probe", "note": "No hook input carries a permission mode." },
+    "known": [],
+    "askSurvives": []
+  },
+
+  "upstreamLimitations": [
+    "permission.ask is declared in the plugin types and never fired. Building on it would produce an adapter that appears installed and enforces nothing.",
+    "A plugin that fails to load is silently skipped, with no warning, and the agent runs unpoliced.",
+    "No hook timeout of any kind, so a slow hook hangs the agent rather than failing.",
+    "POST /session/{id}/shell runs commands with no permission check and no event.",
+    "Mutating tool args in a plugin changes what the permission engine evaluates, so plugin order decides the verdict."
+  ],
+
+  "leastgrantLimitations": [
+    "No adapter ships. This file records a completed evaluation, not a supported integration.",
+    "Revisit if OpenCode wires permission.ask to the permission engine, which would make a faithful adapter straightforward."
+  ]
+}
