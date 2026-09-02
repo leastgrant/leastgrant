@@ -1037,10 +1037,13 @@ weigh before trusting this:
 
 - **Not a sandbox.** Everything here is a decision layer. Once a call is approved,
   LeastGrant has no further say, and it cannot see what a program does after it starts.
-- **Fails open outside the judging path.** An unreadable stdin, a full disk, a config
-  that will not parse: the hook exits 0 with no opinion and the agent proceeds. This is
+- **Fails open outside the judging path.** An unreadable stdin, a full disk: the hook
+  exits 0 with no opinion and the agent proceeds. This is
   deliberate — a permission tool that wedges the agent gets uninstalled — but it means
-  LeastGrant is not a control you can rely on being present.
+  LeastGrant is not a control you can rely on being present. A config file that will not
+  parse used to be on that list and is not any more: it now says so on stderr and falls
+  to `strict`, which asks about everything, because reverting to the permissive default
+  is a change to what the human configured and doing it silently is the worst version.
 - **44.5% of real commands are marked not-understood.** Inline code (`python -c`), script
   files, package runners and unknown binaries cannot be reasoned about, so they always
   ask. That is the honest answer and it is also the single largest source of prompts.

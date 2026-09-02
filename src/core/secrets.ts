@@ -128,7 +128,11 @@ const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = ([
   { name: /^secrets?\.(json|ya?ml|toml|ini)$/i, why: 'this file is named for secrets', tag: 'generic' },
   { name: /^id_(rsa|dsa|ecdsa|ed25519|xmss)$/i, why: 'this is an SSH private key', tag: 'ssh' },
   { name: /^known_hosts$/i, why: 'this maps your SSH trust relationships', tag: 'ssh' },
-  { name: /^service[-_]?account.*\.json$/i, why: 'this is a cloud service-account key', tag: 'gcp' },
+  // Anchored at the start until an audit pointed out that nobody names them
+  // that way: `prod-service-account-key.json` and `my-service-account.json`
+  // both went through as ordinary JSON. The name is distinctive enough to match
+  // anywhere in the basename.
+  { name: /service[-_]?account.*\.json$/i, why: 'this is a cloud service-account key', tag: 'gcp' },
   { name: /^kubeconfig$/i, why: 'Kubernetes cluster credentials', tag: 'kube' },
   { name: /^terraform\.tfstate(\.backup)?$/i, why: 'Terraform state often contains plaintext secrets', tag: 'terraform' },
   { name: /^\.terraformrc$/i, why: 'Terraform credentials live here', tag: 'terraform' },
@@ -408,8 +412,21 @@ const RULES: RedactRule[] = [
   // passwords contain `@` and stopping at the first one leaves the tail of the
   // secret in the ledger.
   { rx: /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@«»]+):([^\s/«»]+)@/gi, label: 'url-password' },
-  // Authorization headers of any scheme.
-  { rx: /((?:Authorization|Proxy-Authorization)\s*:\s*)(?:Bearer|Basic|Token|ApiKey)\s+[A-Za-z0-9._~+/=-]{8,}/gi, label: 'auth-header' },
+  // Authorization headers, whatever the scheme is called.
+  //
+  // This listed four scheme names — Bearer, Basic, Token, ApiKey — while the
+  // comment and docs/privacy.md both said "any scheme". Anything else went into
+  // the ledger intact: `Authorization: DPoP …`, `Authorization: Negotiate …`,
+  // `Authorization: SSWS …` (Okta), `Authorization: GenieKey …`, and every
+  // vendor scheme nobody has heard of yet.
+  //
+  // A scheme is one unquoted word followed by the credential, so match that
+  // shape instead of enumerating the words. The credential is still required to
+  // be long enough that `Authorization: Basic` on its own is not a match.
+  {
+    rx: /((?:Authorization|Proxy-Authorization)\s*:\s*)(?:[A-Za-z][A-Za-z0-9._-]*\s+)?[A-Za-z0-9._~+/=-]{8,}/gi,
+    label: 'auth-header',
+  },
   // Common CLI password flags.
   { rx: /(--?(?:password|passwd|pwd|token|api[-_]?key|secret|auth)[= ])(?!\s)("[^"]*"|'[^']*'|\S+)/gi, label: 'flag-value' },
   // mysql -pSECRET (no space).

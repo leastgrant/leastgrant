@@ -266,3 +266,35 @@ describe('the refusal journal records refusals, not saves', () => {
     }
   });
 });
+
+describe('two rules that were narrower than their own documentation', () => {
+  test('an Authorization header is redacted whatever the scheme is called', async () => {
+    // The rule listed four scheme names while its comment and docs/privacy.md
+    // both said "any scheme". Everything else went into the ledger intact —
+    // DPoP, Negotiate, Okta's SSWS, and every vendor scheme not invented yet.
+    const { redact } = await import('../src/core/secrets.js');
+    for (const scheme of ['Bearer', 'Basic', 'Token', 'ApiKey', 'DPoP', 'Negotiate', 'SSWS', 'GenieKey']) {
+      const out = redact(`curl -H "Authorization: ${scheme} abcdefgh12345678"`);
+      assert.ok(!out.includes('abcdefgh12345678'), `${scheme} leaked: ${out}`);
+    }
+  });
+
+  test('a header with no credential after it is not a match', async () => {
+    // The credential must still be long enough that the word alone does not
+    // trip it, or the rule starts redacting prose about headers.
+    const { redact } = await import('../src/core/secrets.js');
+    assert.equal(redact('Authorization: Basic'), 'Authorization: Basic');
+  });
+
+  test('a service-account key is recognised wherever the name sits', async () => {
+    // Anchored to the start of the basename, so the spellings people actually
+    // use — `prod-service-account-key.json` — went through as ordinary JSON.
+    const { classifySecretPath } = await import('../src/core/secrets.js');
+    for (const p of ['/p/service-account.json', '/p/my-service-account.json', '/p/prod-service-account-key.json']) {
+      assert.equal(classifySecretPath(p).secret, true, p);
+    }
+    for (const p of ['/p/package.json', '/p/tsconfig.json', '/p/account.json']) {
+      assert.equal(classifySecretPath(p).secret, false, `${p} should not be a credential`);
+    }
+  });
+});
