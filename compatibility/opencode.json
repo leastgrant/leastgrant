@@ -114,5 +114,29 @@
   "leastgrantLimitations": [
     "No adapter ships. This file records a completed evaluation, not a supported integration.",
     "Revisit if OpenCode wires permission.ask to the permission engine, which would make a faithful adapter straightforward."
-  ]
+  ],
+  "verification": {
+    "live": {
+      "done": false,
+      "blockedBy": "No adapter ships, so there is nothing to run inside the real agent. Support is deferred for the reasons in deferredBecause: the one unraceable channel is bypassed by a documented HTTP endpoint, and the other is a race the policy can lose. The product itself was driven live — that is where those measurements came from — but LeastGrant was not in the loop."
+    },
+    "transport": {
+      "done": false,
+      "blockedBy": "No adapter ships, so there is no invocation to reproduce. The shape is known and is the least of the problems here: a plugin is imported in-process from .opencode/plugin and called directly, with no subprocess, no quoting layer and no wire format between it and the host. Nothing about this deferral is about transport."
+    },
+    "contract": {
+      "done": true,
+      "what": "Plugin hook set, the permission reply endpoint, the tool.execute.before throw path and the shell endpoint that bypasses it established by running the real product with instrumented plugins against a deterministic model.",
+      "version": "1.18.26",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    },
+    "conformance": {
+      "done": false,
+      "blockedBy": "No adapter ships, so the conformance suite has nothing to drive. It would arrive with the adapter rather than after it — the suite fails a build where an adapter exists without a conformance shape, which is how Cursor was caught having never been tested."
+    }
+  },
+  "mechanism": "None. A plugin would attach through `tool.execute.before` and the permission reply endpoint; neither is sufficient. See deferredBecause."
 }

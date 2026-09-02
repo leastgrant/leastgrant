@@ -162,6 +162,26 @@ describe('adapter conformance: the suite has subjects', () => {
     assert.ok(SUBJECTS.length >= 3, `only ${SUBJECTS.length} adapters under conformance test`);
   });
 
+  test('the conformance record matches who is actually driven here', () => {
+    // `verification.conformance` is a claim about THIS FILE, so this file is
+    // the only honest place to check it. Declared in the data and verified
+    // here, in both directions: an agent claiming to be conformance-tested must
+    // be under test, and an agent under test must carry the claim — otherwise
+    // its public grade understates what is known, which is its own kind of
+    // wrong.
+    for (const a of loadCompatibility()) {
+      const driven = Boolean(SHAPES[a.id]) && Boolean(a.adapter);
+      const claimed = Boolean(a.verification?.conformance?.done);
+      assert.equal(
+        claimed,
+        driven,
+        driven
+          ? `${a.id} is driven by this suite but its record does not say so`
+          : `${a.id} claims conformance testing and nothing here drives it`,
+      );
+    }
+  });
+
   test('no adapter ships without being exercised here', () => {
     // The admission gate, and it was missing.
     //

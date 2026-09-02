@@ -326,6 +326,19 @@ list badly. The real categories:
   `.claude/hooks`, `.cursor/hooks.json`, `.cursor/cli.json`, `.codex/config.toml`,
   `.gemini/settings.json`, `.copilot/hooks`, `.aider.conf.yml`,
   `.leastgrant/config.json`, `managed-settings.json`.
+- **The file each agent reads to decide whether LeastGrant runs at all** —
+  `.codex/hooks.json`, `.gemini/config/hooks.json`, `.agents/hooks.json` and the rest of
+  `.agents/`, plus `opencode.json` and `.config/opencode/`. Three of those were missing
+  until they were found by driving every `configPath` in `compatibility/*.json` through
+  the engine rather than by reading the list above — which looked complete, and holds
+  `.codex/config.toml` and `.gemini/settings.json` while the actual hook configuration
+  for both agents lives elsewhere. None of the three was silently allowed: two asked
+  because they sit outside the project and one asked because it was unfamiliar. Neither
+  reason is a floor. Outside-home writes share the `<path:outside:home>` signature, so
+  approving one approves the class, and unfamiliarity is exactly what promotion retires.
+  Both roads ended at a silent allow on the off switch. `test/control-files.test.ts`
+  derives the requirement from the compatibility records, so the next adapter cannot
+  ship its config path unfloored.
 - **CI configuration** — `.github/workflows`, `.gitlab-ci.yml`,
   `.circleci/config.yml`, `azure-pipelines.yml`, `.github/hooks`. An edit here runs
   later, on someone else's machine, under someone else's credentials.
@@ -1059,11 +1072,28 @@ weigh before trusting this:
   secret under an unremarkable flag will pass through into a stored signature. The
   `«redacted»` markers tell you where it caught something; nothing tells you where it
   did not.
-- **The Cursor adapter has never run inside Cursor.** It is written against the
-  published hook contract and unit-tested both ways, including a test that it agrees
-  with the Claude adapter — but nobody has confirmed that Cursor invokes it. Cursor's
-  `beforeReadFile` also has no "ask", so an unfamiliar read there is allowed rather than
-  blocked; a credential read is denied.
+- **The Cursor adapter has never run inside Cursor.** Its Windows transport has been
+  reproduced byte for byte — PowerShell with the payload piped in from a temp file — and
+  LeastGrant driven through it, which is how the UTF-8 BOM bug was found, and it is still
+  not the same thing as Cursor invoking it. Three claims remain unconfirmed: that Cursor
+  loads `~/.cursor/hooks.json`, that it registers the steps LeastGrant asks for, and that
+  an ask raises the approval UI. Cursor has no headless agent mode, so closing that gap
+  needs a human driving a GUI. `beforeReadFile` is also post-execution and has no "ask":
+  a deny stops the content reaching the model, and the file has already been read.
+- **The Antigravity adapter has never run inside Antigravity.** The contract was read
+  out of the shipped 153 MB Go runtime rather than from documentation, and two things the
+  first version of the adapter got wrong came from that reading: there is no
+  `hook_event_name` on the wire, because the event is a protobuf oneof, and the tool names
+  are snake_case with PascalCase argument keys. Both would have made a plausible-looking
+  adapter that never matched a single call. Completing a live run needs Google OAuth,
+  which has not been performed. Antigravity is also the only agent where LeastGrant can
+  force a prompt that a cached "always allow" cannot satisfy — the strongest ask semantics
+  of anything here, and nothing has exercised them.
+- **Antigravity's hook engine can be switched off from the server.** It installs only
+  when the experiment flag `json-hooks-enabled` is delivered true. That flag is
+  per-session, not persisted, not readable from the client and not overridable, so
+  LeastGrant cannot distinguish a session where it is enforcing from one where it was
+  never loaded. A non-zero exit there also discards stdout and fails **open**.
 - **Concurrent calls still lose ordering.** Pending records and taint are now merged
   rather than overwritten, but `lastCapability` — which drives the "unusual transition"
   signal — is last-writer-wins across parallel calls. That weakens a heuristic; it does

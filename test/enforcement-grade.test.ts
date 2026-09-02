@@ -17,12 +17,18 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { assess, loadCompatibility, LEVEL_MEANING, type AgentCompatibility } from '../src/core/compatibility.js';
+import {
+  assess,
+  loadCompatibility,
+  verificationProblems,
+  LEVEL_MEANING,
+  type AgentCompatibility,
+} from '../src/core/compatibility.js';
 
 const base = (over: Partial<AgentCompatibility> = {}): AgentCompatibility => ({
   id: 'test',
   name: 'Test Agent',
-  supported: 'enforcing',
+  supported: 'shipped',
   adapter: 'src/adapters/claude-code/hook.ts',
   versionTested: '1.0.0',
   lastVerified: '2026-09-02',
@@ -47,6 +53,16 @@ const base = (over: Partial<AgentCompatibility> = {}): AgentCompatibility => ({
   },
   observation: { postToolUse: { value: true, evidence: 'probe' } },
   modes: {},
+  // Somebody ran it. This is not decoration: `assess` reads "has anyone run
+  // this" off `deriveVerification` rather than re-deriving it from the evidence
+  // marks, so an agent with probe-grade facts and no recorded run grades as
+  // unproven — which is the right answer, and used to be a silent upgrade.
+  verification: {
+    live: { done: true, what: 'ran it', version: '1.0.0', os: ['win32'], date: '2026-09-02' },
+    transport: { done: true, what: 'drove the real invocation', version: '1.0.0', os: ['win32'], date: '2026-09-02' },
+    contract: { done: true, what: 'read the shipped binary', version: '1.0.0', os: ['win32'], date: '2026-09-02' },
+    conformance: { done: true, what: 'suite drives it', version: '1.0.0', os: ['win32'], date: '2026-09-02' },
+  },
   upstreamLimitations: [],
   leastgrantLimitations: [],
   ...over,
@@ -102,20 +118,52 @@ describe('enforcement grading', () => {
   });
 
   test('contract evidence alone never grades as verified', () => {
-    const v = assess(
-      base({
-        osTested: [],
-        verdicts: {
-          allow: { value: 'honoured', evidence: 'source' },
-          deny: { value: 'honoured', evidence: 'source' },
-          ask: { value: 'honoured', evidence: 'source' },
-        },
-        interception: Object.fromEntries(
-          Object.keys(base().interception).map((k) => [k, { value: 'gated', evidence: 'source' }]),
-        ),
-      }),
+    // A perfect agent on paper: every verdict honoured, every class gated, and
+    // nobody has ever run it. It must not reach `enforcing` on the strength of
+    // a well-read binary.
+    const onPaper = base({
+      osTested: [],
+      verification: {
+        ...base().verification!,
+        live: { done: false, blockedBy: 'nobody has started this agent with LeastGrant installed' },
+      },
+      verdicts: {
+        allow: { value: 'honoured', evidence: 'source' },
+        deny: { value: 'honoured', evidence: 'source' },
+        ask: { value: 'honoured', evidence: 'source' },
+      },
+      interception: Object.fromEntries(
+        Object.keys(base().interception).map((k) => [k, { value: 'gated', evidence: 'source' }]),
+      ),
+    });
+    assert.equal(assess(onPaper).level, 'unverified');
+  });
+
+  test('a live claim with nothing probe-grade behind it is rejected outright', () => {
+    // The same record with `live: done` flipped on and nothing else changed.
+    // This is how the grade would be gamed — one boolean — so the two have to
+    // corroborate: somebody who ran the real agent came back knowing something
+    // first-hand, and the record has to show it.
+    const claimed = base({
+      osTested: [],
+      verdicts: {
+        allow: { value: 'honoured', evidence: 'source' },
+        deny: { value: 'honoured', evidence: 'source' },
+        ask: { value: 'honoured', evidence: 'source' },
+      },
+      interception: Object.fromEntries(
+        Object.keys(base().interception).map((k) => [k, { value: 'gated', evidence: 'source' }]),
+      ),
+    });
+    const problems = verificationProblems(claimed);
+    assert.ok(
+      problems.some((p) => /evidence: probe/.test(p)),
+      `a live claim with no probe-grade fact was accepted: ${JSON.stringify(problems)}`,
     );
-    assert.equal(v.level, 'unverified');
+    assert.ok(
+      problems.some((p) => /no OS/.test(p)),
+      `a live claim with no tested OS was accepted: ${JSON.stringify(problems)}`,
+    );
   });
 
   test('an agent with no adapter is reported as none, not as broken', () => {

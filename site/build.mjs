@@ -28,11 +28,18 @@ import { ORIGIN, setAssets } from './lib/layout.mjs';
 import { iconSvg, MARK_PATHS } from './lib/brand.mjs';
 import { home } from './pages/home.mjs';
 import { security } from './pages/security.mjs';
-import { DOCS, docPage, docsIndex, cliPage, agentsPage } from './pages/docs.mjs';
+import { DOCS, docPage, docsIndex, cliPage } from './pages/docs.mjs';
+import { agentsIndex, agentPage } from './pages/agents.mjs';
 import { notFound } from './pages/not-found.mjs';
 import { compatibility } from './pages/compatibility.mjs';
 import { corpus } from './pages/corpus.mjs';
-import { loadCompatibility, assess } from '../dist/src/core/compatibility.js';
+import {
+  loadCompatibility,
+  assess,
+  deriveVerification,
+  verificationProblems,
+  GRADE_MEANING,
+} from '../dist/src/core/compatibility.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, 'dist');
@@ -139,7 +146,37 @@ export async function build({ quiet = false } = {}) {
   emit('security/corpus/index.html', corpus(facts, JSON.parse(fs.readFileSync(path.join(REPO, 'corpus', 'bypasses.json'), 'utf8'))), '/security/corpus/');
   emit('docs/index.html', docsIndex(facts), '/docs/');
   emit('docs/cli/index.html', cliPage(facts, help), '/docs/cli/');
-  emit('docs/agents/index.html', agentsPage(facts), '/docs/agents/');
+  // The Agents reference: an index plus one page per agent, all generated from
+  // compatibility/*.json.
+  //
+  // The build refuses to publish a record that claims more than the runs it
+  // lists — a `live` test with no version, a run marked done with no date, an
+  // adapter with no verification record at all. A page that overstated its
+  // evidence would be worse than no page, because it would be believed.
+  {
+    const records = loadCompatibility();
+    const problems = records.flatMap(verificationProblems);
+    if (problems.length) {
+      throw new Error('compatibility records claim more than they establish: ' + problems.join('; '));
+    }
+    const entries = records.map((agent) => ({
+      agent: { ...agent, repoFile: `${facts.repo}/blob/main/compatibility/${agent.id}.json` },
+      assessment: assess(agent),
+      grade: deriveVerification(agent),
+    }));
+    emit(
+      'docs/agents/index.html',
+      agentsIndex({ ...facts, gradeMeaning: GRADE_MEANING }, entries),
+      '/docs/agents/',
+    );
+    for (const e of entries) {
+      emit(
+        `docs/agents/${e.agent.id}/index.html`,
+        agentPage(facts, e.agent, e.assessment, e.grade, GRADE_MEANING[e.grade]),
+        `/docs/agents/${e.agent.id}/`,
+      );
+    }
+  }
   for (const doc of DOCS) {
     emit(`docs/${doc.slug}/index.html`, docPage(facts, doc), `/docs/${doc.slug}/`);
   }

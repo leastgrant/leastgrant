@@ -28,16 +28,81 @@ export interface Fact<T = unknown> {
   note?: string;
 }
 
+/**
+ * A run that happened, recorded so a claim can point at it.
+ *
+ * `Grade` says how strong a piece of evidence is; this says WHAT WAS RUN, which
+ * is a different question and the one that kept getting collapsed. `probe` was
+ * doing three jobs at once: "we drove the real agent with our hook installed",
+ * "we reproduced the agent's invocation and drove that", and "we ran the
+ * product to learn how it behaves". Only the first is a live test, and reading
+ * the second as one is how an untested integration gets a green badge.
+ */
+export interface Run {
+  /** Did it happen. */
+  done: boolean;
+  /** What was run, in one line, specific enough to repeat. */
+  what?: string;
+  /** The agent version it ran against. */
+  version?: string;
+  /** Platforms it ran on. */
+  os?: string[];
+  /** When, ISO date. */
+  date?: string;
+  /** Why not, when `done` is false. This is the interesting field. */
+  blockedBy?: string;
+}
+
+/**
+ * What has actually been established about this integration, by kind.
+ *
+ * Deliberately four independent records rather than one level, because they are
+ * not a ladder and an adapter can hold some and not others. Conformance says
+ * our side is correct; it says nothing about whether the host ever calls us.
+ * Contract says we read the host correctly; it says nothing about whether we
+ * read it *completely*. Only `live` speaks to the whole path, and it is the one
+ * that is hardest to get and easiest to imply.
+ */
+export interface Verification {
+  /** The real agent ran, with LeastGrant installed, and enforcement was observed. */
+  live: Run;
+  /** The agent's real invocation was reproduced and LeastGrant driven through it. */
+  transport: Run;
+  /** The contract was read out of the shipped binary or official documentation. */
+  contract: Run;
+  /** The adapter passes the black-box conformance suite. Derived, never declared. */
+  conformance: Run;
+}
+
 export interface AgentCompatibility {
   id: string;
   name: string;
-  supported: 'enforcing' | 'partial' | 'evaluated-not-yet-shipped' | 'evaluated-and-deferred';
+  /**
+   * Whether an adapter ships, and if not, why not. Deliberately NOT a strength.
+   *
+   * It used to be, with `enforcing` and `partial` among its values, and every
+   * shipped record declared a level stronger than its own evidence derived:
+   * `enforcing` on Codex, which cannot ask anybody anything, and `enforcing` on
+   * Antigravity, which nothing had ever run. Nobody wrote those in bad faith —
+   * they were true intentions written before the data caught up, and a hand-set
+   * strength field is a promise you have to remember to break.
+   *
+   * So the field no longer can be one. How strong an integration is comes from
+   * `assess()`; what has been run to establish it comes from
+   * `deriveVerification()`. This says only whether we shipped something.
+   */
+  supported: 'shipped' | 'evaluated-not-yet-shipped' | 'evaluated-and-deferred';
   adapter: string | null;
   configPath?: string;
+  /** What the user types to wire it up. */
+  install?: string;
+  /** One line on how the integration attaches — the mechanism, not the verdict. */
+  mechanism?: string;
   versionTested: string;
   lastVerified: string;
   osTested: string[];
   osUntested?: string[];
+  verification?: Verification;
   verdicts: Record<string, Fact<string>>;
   failure: Record<string, Fact<unknown>>;
   interception: Record<string, Fact<string>>;
@@ -45,6 +110,99 @@ export interface AgentCompatibility {
   modes: Record<string, unknown>;
   upstreamLimitations: string[];
   leastgrantLimitations: string[];
+  deferredBecause?: string;
+}
+
+/**
+ * The public verification label, strongest first.
+ *
+ * Never written into a data file. `deriveVerification` computes it from the
+ * runs that were recorded, so a label cannot be raised without recording the
+ * run that justifies it, and recording a run without its version and OS is
+ * itself an error — see `verificationProblems`.
+ */
+export type VerificationGrade =
+  | 'LIVE VERIFIED'
+  | 'REAL TRANSPORT PROBED'
+  | 'CONTRACT / BINARY VERIFIED'
+  | 'CONFORMANCE TESTED'
+  | 'UNVERIFIED';
+
+export const GRADE_MEANING: Record<VerificationGrade, string> = {
+  'LIVE VERIFIED':
+    'the real agent ran with LeastGrant installed and enforcement was observed happening',
+  'REAL TRANSPORT PROBED':
+    "the agent's own invocation was reproduced exactly and LeastGrant driven through it — stronger than reading the contract, and not the same as running the agent",
+  'CONTRACT / BINARY VERIFIED':
+    'the contract was read out of the shipped binary or official docs; nothing has exercised it',
+  'CONFORMANCE TESTED':
+    'the adapter passes the black-box contract every adapter must pass, which says our side is right and nothing about whether the host calls us',
+  UNVERIFIED: 'no adapter ships, or nothing has been established about it',
+};
+
+/** The grade this agent's recorded evidence supports. Never declared. */
+export function deriveVerification(agent: AgentCompatibility): VerificationGrade {
+  const v = agent.verification;
+  if (!agent.adapter) return 'UNVERIFIED';
+  if (v?.live?.done) return 'LIVE VERIFIED';
+  if (v?.transport?.done) return 'REAL TRANSPORT PROBED';
+  if (v?.contract?.done) return 'CONTRACT / BINARY VERIFIED';
+  if (v?.conformance?.done) return 'CONFORMANCE TESTED';
+  return 'UNVERIFIED';
+}
+
+/**
+ * Ways a record can claim more than it has established.
+ *
+ * Returned rather than thrown so the build can print all of them at once, and
+ * so `doctor` can show the same list to a user who wants to know why an agent
+ * is graded the way it is.
+ */
+export function verificationProblems(agent: AgentCompatibility): string[] {
+  const out: string[] = [];
+  const v = agent.verification;
+  if (!agent.adapter) {
+    if (v?.live?.done) out.push(`${agent.id}: claims a live test but ships no adapter`);
+    return out;
+  }
+  if (!v) {
+    out.push(`${agent.id}: ships an adapter with no verification record at all`);
+    return out;
+  }
+  for (const [kind, run] of Object.entries(v) as [string, Run][]) {
+    if (!run?.done) {
+      // A run that did not happen must say why. "Nobody got round to it" is a
+      // fine answer; silence is not, because silence reads as an oversight and
+      // hides whether the thing is even possible.
+      if (!run?.blockedBy) out.push(`${agent.id}: ${kind} is not done and does not say why`);
+      continue;
+    }
+    if (!run.what) out.push(`${agent.id}: ${kind} is marked done without saying what was run`);
+    if (!run.version) out.push(`${agent.id}: ${kind} is marked done with no agent version`);
+    if (!run.os?.length) out.push(`${agent.id}: ${kind} is marked done with no OS`);
+    if (!run.date) out.push(`${agent.id}: ${kind} is marked done with no date`);
+  }
+
+  // A live run and probe-grade facts have to corroborate each other. Somebody
+  // who ran the real agent came back knowing something first-hand, so a record
+  // claiming a live test while every fact in it is still marked `source` has
+  // either not had the run written up or is claiming a run that did not happen.
+  // Either way the grade is ahead of the evidence, which is the whole failure
+  // this function exists to catch.
+  if (v.live?.done) {
+    const probed = Object.values({ ...agent.verdicts, ...agent.interception }).some(
+      (f) => f?.evidence === 'probe',
+    );
+    if (!probed) {
+      out.push(
+        `${agent.id}: claims a live test but not one verdict or tool class is marked evidence: probe`,
+      );
+    }
+    if (!agent.osTested?.length) {
+      out.push(`${agent.id}: claims a live test but records no OS it was tested on`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -190,14 +348,23 @@ export function assess(agent: AgentCompatibility): Assessment {
   }
 
   // 5. Has anyone actually run it.
-  const probed = Object.values({ ...agent.verdicts, ...agent.interception }).some((f) => f?.evidence === 'probe');
-  const live = probed && agent.osTested.length > 0;
+  //
+  // Read off `deriveVerification` rather than re-derived from the evidence
+  // marks. There were two definitions of "somebody ran this" in this file —
+  // this one, and the verification record — and two definitions of one fact is
+  // how a support table ends up disagreeing with the page explaining it.
+  // `verificationProblems` holds them together from the other side: a record
+  // claiming a live run with no probe-grade fact in it fails the build.
+  const live = deriveVerification(agent) === 'LIVE VERIFIED';
   findings.push(
     live
       ? { status: 'ok', text: `verified against ${agent.name} ${agent.versionTested} on ${agent.osTested.join(', ')}` }
       : {
           status: 'warn',
-          text: `never run inside a real ${agent.name} — the contract is read from what ships, the integration is untested`,
+          text: `never run inside a real ${agent.name} — ${
+            agent.verification?.live?.blockedBy ??
+            'the contract is read from what ships, the integration is untested'
+          }`,
         },
   );
 
@@ -224,11 +391,33 @@ export function assess(agent: AgentCompatibility): Assessment {
 }
 
 /** One line describing what a level means, for a reader who has not seen the scale. */
+/**
+ * The word every surface prints for an enforcement level.
+ *
+ * Here rather than in each renderer because the README, the website and doctor
+ * all show this and two of them had drifted: the README said "Partial" while
+ * the agents page said "partial", which is harmless until a test compares them
+ * and someone weakens the test to make it pass.
+ */
+export const LEVEL_LABEL: Record<Enforcement, string> = {
+  enforcing: 'Enforcing',
+  partial: 'Partial',
+  degraded: 'Veto only',
+  // Not "Unverified". That word now belongs to the verification grade, and the
+  // two axes are shown side by side — an agent reading "Unverified · REAL
+  // TRANSPORT PROBED" invites the reader to decide which one is the real
+  // answer. This axis says how much LeastGrant will claim; that one says what
+  // was run.
+  unverified: 'Unproven',
+  none: 'Not yet',
+};
+
 export const LEVEL_MEANING: Record<Enforcement, string> = {
   enforcing: 'every verdict lands and every tool class is gated',
   partial: 'it enforces, with a named gap below',
   degraded: 'it can refuse, but it cannot ask a person',
-  unverified: 'an adapter ships and nobody has run it against the real agent',
+  unverified:
+    'an adapter ships and nothing has run it inside the real agent, so no enforcement claim is made',
   none: 'no adapter ships',
 };
 

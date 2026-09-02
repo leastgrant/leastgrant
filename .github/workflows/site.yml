@@ -8,10 +8,16 @@
 # release pipeline verifies the tarball; this verifies the pages. They share a
 # repository and nothing else.
 #
-# It runs on every change to the site *or to the Markdown the site renders*,
-# because the docs pages are views of those files: an edit to THREAT-MODEL.md
-# changes the built site, and the assertions here are what catch it if that
-# edit breaks a link or drops a claim the site quotes.
+# It runs on every change to the site *or to the data and Markdown the site
+# renders*, because the docs pages are views of those files: an edit to
+# THREAT-MODEL.md changes the built site, and the assertions here are what catch
+# it if that edit breaks a link or drops a claim the site quotes.
+#
+# `compatibility/**` is in that list for the same reason and was missing for
+# longer than it should have been. The Agents pages are generated from those
+# records, so lowering an agent's grade or adding an adapter changes twenty
+# pages while touching nothing under site/ — a stale published site with no red
+# build anywhere to say so.
 name: Site
 
 # The two path lists are duplicated rather than shared through a YAML anchor.
@@ -23,6 +29,9 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      - 'compatibility/**'
+      - 'src/core/compatibility.ts'
+      - 'scripts/gen-readme.mjs'
       - 'docs/**'
       - 'README.md'
       - 'THREAT-MODEL.md'
@@ -34,6 +43,9 @@ on:
   pull_request:
     paths:
       - 'site/**'
+      - 'compatibility/**'
+      - 'src/core/compatibility.ts'
+      - 'scripts/gen-readme.mjs'
       - 'docs/**'
       - 'README.md'
       - 'THREAT-MODEL.md'
@@ -76,7 +88,7 @@ jobs:
       # Markdown renderer against hostile payloads, assertions over the built
       # artifact, and the origin server's real HTTP responses.
       - name: Verify
-        run: node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/server.test.mjs
+        run: node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/agents.test.mjs site/test/server.test.mjs
 
       # A second build from the same source must produce the same bytes. If it
       # does not, something in the build is reading the clock, the filesystem

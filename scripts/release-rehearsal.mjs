@@ -90,6 +90,14 @@ must(npmCmd, ['test']);
 banner('randomised symlink topologies');
 must(process.execPath, [path.join(ROOT, 'scripts', 'fuzz-paths.mjs')]);
 
+// No release may claim more about an agent than has been established about it,
+// and no adapter may reach users with nothing documenting it. Checked here as
+// well as in CI because a release is the moment those claims become something
+// somebody relies on.
+banner('every agent claim is within its evidence');
+must(process.execPath, [path.join(ROOT, 'scripts', 'verify-agent-docs.mjs')]);
+must(process.execPath, [path.join(ROOT, 'scripts', 'gen-readme.mjs'), '--check']);
+
 // 7 — pack, then inspect and use the artifact itself.
 banner('pack');
 must(npmCmd, ['pack', '--pack-destination', OUT]);

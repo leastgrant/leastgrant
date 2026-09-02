@@ -1,7 +1,7 @@
 {
   "id": "cursor",
   "name": "Cursor",
-  "supported": "partial",
+  "supported": "shipped",
   "adapter": "src/adapters/cursor/hook.ts",
   "configPath": "~/.cursor/hooks.json",
   "versionTested": "3.18.25",
@@ -123,5 +123,40 @@
     "Never run inside a live Cursor session, and there is no way to do so autonomously: `cursor --help` offers only VS Code flags plus `--chat`, which opens a window, and the hooks service is a workbench contribution whose extension host is forked per window. What HAS been done is stronger than a contract test and weaker than a live session — Cursor’s Windows invocation was reproduced byte for byte (powershell.exe with -NoProfile -NonInteractive -ExecutionPolicy Bypass, the payload written to a %TEMP% file and piped in through $input) and LeastGrant driven through it. What is still unverified is that a real Cursor loads ~/.cursor/hooks.json, registers the five steps, and raises its approval UI on an ask.",
     "That reproduction is how the worst bug in this integration was found: PowerShell 5.1 prefixes the payload with a UTF-8 BOM, JSON.parse threw, the hook exited silently, and failClosed turned that into a deny of every shell command, MCP call and file read. Fixed. It is recorded here because it is the strongest available argument that contract-testing an integration is not the same as running it.",
     "Verified on Windows only. The POSIX transport passes the payload on native stdin instead and has not been exercised."
-  ]
+  ],
+  "verification": {
+    "live": {
+      "done": false,
+      "blockedBy": "Cursor has no headless agent mode. `cursor --help` offers VS Code flags plus `--chat`, which opens a window, and the hooks service is a workbench contribution whose extension host is forked per window. A human has to drive a GUI. Three things stay unverified because of it: that Cursor loads ~/.cursor/hooks.json, that it registers the five steps, and that an ask raises the approval UI."
+    },
+    "transport": {
+      "done": true,
+      "what": "Cursor’s Windows invocation reproduced byte for byte — powershell.exe with -NoProfile -NonInteractive -ExecutionPolicy Bypass, the payload written to a %TEMP% file and piped in through $input — and LeastGrant driven through it. This is how the UTF-8 BOM bug was found, which had LeastGrant refusing every tool call.",
+      "version": "3.18.25",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    },
+    "contract": {
+      "done": true,
+      "what": "The 21-step event list, response validator, failClosed handling and the post-execution nature of beforeReadFile read from the shipped 42 MB workbench and extension-host bundles.",
+      "version": "3.18.25",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    },
+    "conformance": {
+      "done": true,
+      "what": "Driven by test/conformance.test.ts.",
+      "version": "3.18.25",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    }
+  },
+  "mechanism": "Per-step command hooks in ~/.cursor/hooks.json, on the three before* gates plus two after* events for learning. On Windows the payload is delivered through PowerShell from a temp file rather than on stdin.",
+  "install": "leastgrant install cursor"
 }

@@ -29,7 +29,10 @@ import { repoRoot } from './helpers/repo-root.js';
 const DIR = path.join(repoRoot(), 'compatibility');
 
 const GRADES = new Set(['probe', 'source', 'docs', 'unknown']);
-const SUPPORT = new Set(['enforcing', 'partial', 'evaluated-not-yet-shipped', 'evaluated-and-deferred']);
+// Whether an adapter ships, and if not why. Not a strength: `enforcing` and
+// `partial` used to be values here, and every shipped record declared one
+// stronger than its own evidence derived. Strength comes from assess().
+const SUPPORT = new Set(['shipped', 'evaluated-not-yet-shipped', 'evaluated-and-deferred']);
 const VERDICT_VALUES = new Set(['honoured', 'degrades', 'unsupported', 'ignored', 'partial', 'unknown']);
 const FAIL_VALUES = new Set(['open', 'closed', 'none', 'unknown']);
 const REACHES = new Set(['gated', 'observed', 'partial', 'none', 'unknown']);
@@ -92,7 +95,7 @@ for (const { file, data } of files) {
   describe(`compatibility/${file}`, () => {
     test('declares a support level that matches whether an adapter exists', () => {
       assert.ok(SUPPORT.has(data.supported), `unknown support level ${data.supported}`);
-      if (data.supported === 'enforcing' || data.supported === 'partial') {
+      if (data.supported === 'shipped') {
         assert.ok(data.adapter, `${data.id} claims to be ${data.supported} with no adapter`);
         assert.ok(
           fs.existsSync(path.join(repoRoot(), data.adapter)),

@@ -38,7 +38,16 @@ import { displayPath } from '../../core/paths.js';
 import { listEnvelopes, readLedger, stateDir } from '../../store/index.js';
 import { loadContext } from '../context.js';
 import { claudeSettingsPath } from './install.js';
-import { loadCompatibility, assess, LEVEL_MEANING } from '../../core/compatibility.js';
+import {
+  loadCompatibility,
+  assess,
+  deriveVerification,
+  LEVEL_LABEL,
+  LEVEL_MEANING,
+  GRADE_MEANING,
+  type AgentCompatibility,
+  type Run,
+} from '../../core/compatibility.js';
 import { ago, c, para, plural, rule, sym, term, truncate, width } from '../ui.js';
 import type { Argv } from '../index.js';
 
@@ -163,28 +172,65 @@ function enforcementChecks(): Check[] {
   const checks: Check[] = [];
   for (const agent of agents) {
     const { level, findings } = assess(agent);
+    const grade = deriveVerification(agent);
 
     // The headline status is the worst thing found, so an agent with one real
     // hole cannot read as healthy because four other lines were fine.
-    const status: Status =
+    let status: Status =
       level === 'none' ? 'info'
       : findings.some((f) => f.status === 'bad') ? 'bad'
       : findings.some((f) => f.status === 'warn') ? 'warn'
       : 'ok';
 
+    // Enforcement and verification are different axes and a green line must not
+    // be able to mean only one of them. An adapter can have the best semantics
+    // here and have had nothing exercise them — Antigravity is exactly that —
+    // so anything short of a reproduced invocation caps the line at a warning
+    // regardless of how good the contract looks on paper.
+    const unexercised = grade !== 'LIVE VERIFIED' && grade !== 'REAL TRANSPORT PROBED';
+    if (status === 'ok' && unexercised) status = 'warn';
+
     checks.push({
       id: `enforcement.${agent.id}`,
       group: 'enforcement',
       status,
-      title: `${agent.name}: ${level} — ${LEVEL_MEANING[level]}`,
-      detail: findings
-        .filter((f) => f.status !== 'info')
-        .map((f) => `${f.status === 'ok' ? '·' : '!'} ${f.text}`)
-        .join('\n'),
+      title: `${agent.name}: ${LEVEL_LABEL[level]} — ${LEVEL_MEANING[level]}`,
+      detail: [
+        `${unexercised ? '!' : '·'} ${grade} — ${GRADE_MEANING[grade]}`,
+        ...verificationLines(agent),
+        ...findings
+          .filter((f) => f.status !== 'info')
+          .map((f) => `${f.status === 'ok' ? '·' : '!'} ${f.text}`),
+      ].join('\n'),
     });
   }
 
   return checks;
+}
+
+/**
+ * What has and has not been run, in the record's own words.
+ *
+ * The grade alone answers "how well established is this" but not "what would
+ * it take to establish it better", and the second question is the one somebody
+ * reading a warning actually has. A `blockedBy` is often the most useful line
+ * in the whole section: Cursor's says a human has to drive a GUI, which tells a
+ * reader the gap is not going to close by waiting.
+ */
+function verificationLines(agent: AgentCompatibility): string[] {
+  const v = agent.verification;
+  if (!v) return [];
+  const out: string[] = [];
+  for (const [kind, run] of Object.entries(v) as [string, Run | undefined][]) {
+    if (!run) continue;
+    if (run.done) {
+      const where = [run.version, (run.os ?? []).join(', '), run.date].filter(Boolean).join(' · ');
+      out.push(`· ${kind}: done${where ? ` (${where})` : ''}`);
+    } else {
+      out.push(`! ${kind}: not done — ${run.blockedBy ?? 'no reason recorded'}`);
+    }
+  }
+  return out;
 }
 
 /**

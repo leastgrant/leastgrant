@@ -508,13 +508,42 @@ describe('claims the review found overstated', () => {
 
   test('the Cursor read caveat appears wherever agent support is claimed', () => {
     // The home page says "the answer does not change with the editor you
-    // opened". Cursor's beforeReadFile has no "ask", so it does change; the
+    // opened". Cursor's file reads are not gated, so it does change, and the
     // caveat has to travel with the claim.
+    //
+    // What this demands is read out of the compatibility record rather than
+    // pinned to a string. Reword the caveat and the test wants the new wording;
+    // ship a Cursor that actually gates reads and the record says `gated` and
+    // the test stops asking. Neither case is served by a page passing because
+    // the word `beforeReadFile` survived somewhere in it.
+    const cursor = JSON.parse(fs.readFileSync(path.join(SITE, '..', 'compatibility', 'cursor.json'), 'utf8'));
+    const read = cursor.interception?.fileRead;
+    if (read?.value === 'gated') return;
+
+    // Distinctive fragments the record itself supplies: identifiers named in
+    // the note, and the opening clause of each recorded limitation.
+    const fragments = [
+      ...new Set(
+        [
+          ...(read?.note ?? '').match(/\b[a-z]+[A-Z]\w+\b/g) ?? [],
+          ...[read?.note, ...(cursor.upstreamLimitations ?? [])]
+            .filter(Boolean)
+            .map((s) => s.split(/[.—]/).find((c) => c.trim().length > 24)?.trim())
+            .filter(Boolean),
+        ].filter(Boolean),
+      ),
+    ];
+    assert.ok(fragments.length, 'the cursor record no longer says anything about ungated reads');
+
     for (const [where, html] of [
       ['home', home],
       ['agents', pages.find((p) => p.file === 'docs/agents/index.html').html],
     ]) {
-      assert.match(html, /beforeReadFile/, `${where} claims parity without the Cursor caveat`);
+      const plain = html.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+      assert.ok(
+        fragments.some((f) => plain.includes(f)),
+        `${where} claims parity without saying Cursor's file reads are "${read?.value}"`,
+      );
     }
   });
 

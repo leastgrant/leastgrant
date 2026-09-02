@@ -1,7 +1,7 @@
 {
   "id": "antigravity",
   "name": "Google Antigravity",
-  "supported": "enforcing",
+  "supported": "shipped",
   "adapter": "src/adapters/antigravity/hook.ts",
   "configPath": "~/.gemini/config/hooks.json (global) or <repo>/.agents/hooks.json (workspace)",
   "versionTested": "2.11.0",
@@ -123,5 +123,35 @@
     "Contract derived from the shipped 2.11.0 Go runtime by symbolising its pclntab and reading the decision sites, not from documentation — which advertises five of the eight common payload fields and omits two of the six accepted verdicts.",
     "Never run inside a real Antigravity session. A headless path exists and was proven to work (language_server.exe --standalone with an isolated --gemini_dir, driven over gRPC by the hidden agentapi subcommand), and it reaches the network/auth boundary; completing a model turn needs Google OAuth, which has not been done.",
     "Verified on Windows only. The Unix launch form (sh -c) could not be read from this build: GOOS is a compile-time constant and only the Windows cmd /c path is present."
-  ]
+  ],
+  "verification": {
+    "live": {
+      "done": false,
+      "blockedBy": "Reachable but not done. The runtime does run headless — `language_server.exe --standalone` against an isolated --gemini_dir starts with no window and serves gRPC, and the undocumented `agentapi` subcommand drives it — but completing a model turn needs Google OAuth, which has not been performed. A probe got as far as \"failed to fetch available models\", meaning every local gate was cleared and only the network/auth boundary remained."
+    },
+    "transport": {
+      "done": false,
+      "blockedBy": "Same OAuth boundary. The invocation shape is known from the shipped runtime (cmd /c on Windows, working directory set to the directory containing hooks.json) but has not been reproduced and driven the way Cursor’s was."
+    },
+    "contract": {
+      "done": true,
+      "what": "Payload, decision vocabulary, failure semantics and the two host-side kill switches read out of the 153 MB Go runtime by symbolising its pclntab and reading the decision sites, plus the hooks guide bundled inside the binary. This is where the \"no hook_event_name\" and snake_case tool-name facts came from — both of which the first adapter got wrong.",
+      "version": "2.11.0",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    },
+    "conformance": {
+      "done": true,
+      "what": "Driven by test/conformance.test.ts.",
+      "version": "2.11.0",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-02"
+    }
+  },
+  "mechanism": "A named hook in ~/.gemini/config/hooks.json with `PreToolUse` and `PostToolUse` groups. There is no event name on the wire — the event is a protobuf oneof — so LeastGrant routes on the payload shape.",
+  "install": "leastgrant install antigravity"
 }
