@@ -21,6 +21,17 @@ Group=leastgrant-deploy
 
 ExecStart=/srv/leastgrant/update.sh
 
+# npm and git both want a home directory, and this account deliberately has
+# none — `ProtectHome=yes` below would hide it anyway. Without these, `npm ci`
+# exits 243 before installing anything and the deploy fails on every run.
+# Pointing them inside the tree the service already owns keeps everything it
+# writes in one place.
+Environment=HOME=/srv/leastgrant/.home
+Environment=XDG_CONFIG_HOME=/srv/leastgrant/.home/.config
+Environment=XDG_CACHE_HOME=/srv/leastgrant/.home/.cache
+Environment=NPM_CONFIG_CACHE=/srv/leastgrant/.home/.npm
+Environment=NPM_CONFIG_UPDATE_NOTIFIER=false
+
 # A build that hangs must not hold the timer open forever.
 TimeoutStartSec=15min
 
@@ -44,9 +55,22 @@ ReadWritePaths=/srv/leastgrant
 
 CapabilityBoundingSet=
 AmbientCapabilities=
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @obsolete @swap @reboot
 SystemCallArchitectures=native
+
+# No SystemCallFilter here, unlike leastgrant-web.service.
+#
+# That unit serves eight hundred kilobytes of static files and makes a very
+# narrow set of calls, so a filter is cheap and precise. This one runs npm and
+# tsc and Brotli, which between them touch a wide and undocumented surface —
+# `@system-service` already killed a working build with SIGSYS partway through
+# compression. Guessing the closure of syscalls a toolchain needs is a losing
+# game, and a filter that breaks the deploy is worse than no filter on a job
+# that holds no credential, listens on nothing, and can only write to one
+# directory.
+#
+# The protections that matter here are the ones above: unprivileged user, no
+# capabilities, no new privileges, read-only filesystem apart from
+# /srv/leastgrant.
 
 # npm and tsc are not small, but they are not a build farm either.
 MemoryMax=2G

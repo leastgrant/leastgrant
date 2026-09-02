@@ -5,13 +5,14 @@
 > `127.0.0.1:8787`, `www` redirects to the apex with path and query preserved,
 > and `leastgrant-web.service` is enabled and running on the origin under a
 > dedicated unprivileged account. Node 22 is installed from the official tarball
-> under `/opt/node`.
+> under `/opt/node`. Pushing to `main` rebuilds the site within ten minutes
+> without anyone logging in (§3.2).
 >
 > Still open: HSTS (see §1.6 — ramp it, do not switch it straight on).
 >
 > Sections 1 and 2 below are the from-zero instructions, kept because they are
 > the record of how this was set up and what to redo if the origin is rebuilt.
-> For a routine content update you only need §3.
+> For a routine content update you need nothing: push to `main`.
 
 The shape of it:
 
@@ -270,8 +271,15 @@ retry.
 
 ## 3. Deploying content
 
+Normally you do not. Push to `main` and the origin rebuilds itself within ten
+minutes — see [3.2](#32-the-timer-that-does-it-for-you). The manual path below
+still exists for a first deploy, for a rollback, and for the times you want to
+watch it happen.
+
+### 3.1 By hand
+
 ```bash
-npm run site:test                    # build + 156 assertions; do not skip
+npm run site:test                    # build + 199 assertions; do not skip
 ./site/deploy/deploy.sh user@vps
 ```
 
@@ -293,23 +301,68 @@ mv -T /srv/leastgrant/.next /srv/leastgrant/current
 curl -sI http://127.0.0.1:8787/ | head -1
 ```
 
-### Later, if you want it automatic
+### 3.2 The timer that does it for you
 
-The clean version is GitHub Actions building and verifying the artifact, and the
-VPS pulling it — not the VPS being pushed to. That keeps deploy credentials off
-GitHub entirely:
+`main` moving is the only trigger. The origin fetches the public repository over
+HTTPS, builds, and swaps the same symlink the manual script does.
 
+**Pull, not push.** GitHub is never given a way into this machine: no deploy
+key, no SSH credential in Actions, no inbound port. The version number on the
+site comes from `package.json` in the commit being built, so a release that
+bumps the version updates the website by virtue of having been pushed.
+
+```bash
+sudo useradd --system --home-dir /srv/leastgrant --shell /usr/sbin/nologin leastgrant-deploy
+sudo install -o leastgrant-deploy -g leastgrant-deploy -m 0755 \
+     site/deploy/update.sh /srv/leastgrant/update.sh
+sudo mkdir -p /srv/leastgrant/.home
+sudo chown -R leastgrant-deploy:leastgrant-deploy /srv/leastgrant
+
+sudo cp site/deploy/leastgrant-site-update.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now leastgrant-site-update.timer
 ```
-main → site.yml builds and verifies → artifact
-                                        ↓
-                        VPS timer fetches the artifact for the
-                        current commit, verifies its checksum,
-                        unpacks to releases/, swaps the symlink
+
+Then watch one cycle rather than trusting it:
+
+```bash
+systemctl list-timers leastgrant-site-update.timer
+sudo systemctl start leastgrant-site-update.service     # don't wait for the tick
+journalctl -u leastgrant-site-update.service -n 30 --no-pager
+basename "$(readlink /srv/leastgrant/current)"          # <stamp>-<commit>
 ```
 
-Do not put the Cloudflare Tunnel token in GitHub Actions. It is not needed for a
-content deploy, and a token that can register as your tunnel is a much larger
-credential than "may upload files".
+Every ten minutes, jittered. Almost every run is a `git fetch` and a string
+comparison and exits having done nothing.
+
+**It decides from what is deployed, not from what the checkout says.** The live
+commit is read off the release directory name, which is `<stamp>-<sha8>`. This
+is not incidental. The first version compared `git rev-parse HEAD` against
+`origin/main`, and the first time a build failed — `npm ci`, out of a missing
+`HOME` — the checkout had already advanced. From then on every run reported
+"unchanged, nothing to do" and exited zero while the live site sat a commit
+behind. A green timer over a stale site is the worst way for a deploy to break,
+and comparing against the artifact makes a failed build simply retry on the next
+tick.
+
+Three other things it will refuse to do:
+
+- **Deploy a non-fast-forward.** A force-push upstream stops the deploy and
+  waits for a person. A rewritten history should not reach the live site
+  quietly.
+- **Build from the wrong repository.** The remote URL is checked against a
+  literal before anything is fetched.
+- **Leave a broken site up.** After the swap it curls the origin, and a
+  non-200 fails the unit with the previous release still on disk.
+
+Rollback is unchanged, and needs no network — but the next tick will roll you
+forward again. Revert the commit rather than the symlink, or `systemctl stop
+leastgrant-site-update.timer` first.
+
+The Cloudflare Tunnel token stays on this machine and is not involved. It is not
+needed to deploy content, and a token that can register as your tunnel is a far
+larger credential than "may upload files" — which is the other reason this is a
+pull.
 
 ---
 
@@ -374,3 +427,8 @@ including 404s.
 **No secrets anywhere in this repository.** The only credential in this
 architecture is the tunnel token, it lives on the VPS in the `cloudflared`
 service's environment, and nothing in `site/` reads it or needs it.
+
+**No deploy credential in GitHub.** Automatic deploys are a pull from a timer on
+the origin (§3.2), so there is no deploy key, no SSH secret in Actions, and
+nothing to rotate if a workflow is compromised. CI can build the site and fail
+the merge; it cannot reach the machine that serves it.

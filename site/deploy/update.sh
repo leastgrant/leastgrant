@@ -42,21 +42,41 @@ cd "$SRC"
 actual=$(git remote get-url origin)
 [ "$actual" = "$REPO" ] || die "origin is $actual, expected $REPO"
 
-before=$(git rev-parse HEAD)
+# Compare against what is DEPLOYED, not against what the working tree is at.
+#
+# Those came apart the first time a build failed. The script had already done
+# the checkout when `npm ci` died, so the tree sat at the new commit while the
+# live site was still on the old one — and every subsequent run said "unchanged,
+# nothing to do" and exited 0. The site would have stayed stale indefinitely
+# with a green timer, which is the worst way for a deploy to break.
+#
+# The release directory is named `<stamp>-<sha8>`, so the live commit can be
+# read straight off the symlink. No new state file, and nothing to get out of
+# step with reality: if it is serving, it deployed.
+deployed=''
+if [ -L "$ROOT/current" ]; then
+  deployed=$(basename "$(readlink "$ROOT/current")")
+  deployed=${deployed##*-}
+fi
+
 git fetch --quiet --no-tags origin "$BRANCH"
 after=$(git rev-parse "origin/$BRANCH")
 
-if [ "$before" = "$after" ]; then
-  log "main is unchanged at ${before:0:8}; nothing to do"
+if [ -n "$deployed" ] && [ "$deployed" = "${after:0:8}" ]; then
+  log "main is unchanged at $deployed; nothing to do"
   exit 0
 fi
 
-# Fast-forward only. A force-push upstream should stop the deploy and be looked
-# at by a person, not be applied silently to the live site.
-git merge-base --is-ancestor "$before" "$after" \
-  || die "origin/$BRANCH is not a fast-forward from ${before:0:8}; refusing to deploy"
+# Fast-forward only, measured from the working tree, which is the last thing
+# actually fetched. A force-push upstream should stop the deploy and be looked
+# at by a person rather than applied silently to the live site.
+before=$(git rev-parse HEAD)
+if [ "$before" != "$after" ]; then
+  git merge-base --is-ancestor "$before" "$after" \
+    || die "origin/$BRANCH is not a fast-forward from ${before:0:8}; refusing to deploy"
+fi
 
-log "main moved ${before:0:8} -> ${after:0:8}"
+log "deploying ${after:0:8} (live: ${deployed:-none})"
 git checkout --quiet --force "$after"
 git clean -qfdx -e node_modules
 
