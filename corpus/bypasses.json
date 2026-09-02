@@ -10,6 +10,7 @@
     "redirects": "Writing where the command name does not say, including /dev/tcp exfiltration.",
     "paths": "Traversal and unusual path spellings that resolve outside the workspace.",
     "credentials": "Direct reads of credential material.",
+    "credential-sweep": "Reaching a credential store by naming a directory above it — a recursive search, copy or archive rooted at $HOME, a drive root or /etc.",
     "network-exfiltration": "Outbound calls carrying data off the machine.",
     "git-execution": "git configuration that turns a read-only-looking git command into code execution.",
     "package-scripts": "Package managers that fetch and execute in one step.",
@@ -70,6 +71,14 @@
     { "id": "paths/traversal-mid-path", "class": "paths", "command": "cat src/../../../.aws/credentials", "expect": "not-allow", "note": "The traversal is in the middle, after a legitimate-looking prefix." },
 
     { "id": "credentials/dotenv", "class": "credentials", "command": "cat .env", "expect": "not-allow", "note": "Inside the workspace, still a credential." },
+    { "id": "credentials/registry-hive-lowercase", "class": "credentials", "command": "cat C:/Windows/System32/config/sam", "expect": "not-allow", "note": "NTFS is case-insensitive, so the lower-case spelling of the SAM hive is the same file as the upper-case one." },
+
+    { "id": "credential-sweep/grep-home", "class": "credential-sweep", "command": "grep -r \"BEGIN OPENSSH PRIVATE KEY\" ~", "expect": "not-allow", "note": "A recursive content search rooted one level above ~/.ssh reads the key just as surely as naming it — and the wider search must not be the safer one." },
+    { "id": "credential-sweep/grep-root", "class": "credential-sweep", "command": "grep -r AKIA /", "expect": "not-allow", "note": "The filesystem root is above every credential store on the machine." },
+    { "id": "credential-sweep/ripgrep-home", "class": "credential-sweep", "command": "rg -n \"PRIVATE KEY\" $HOME", "expect": "not-allow", "note": "ripgrep recurses without being asked, and $HOME is the same place as ~." },
+    { "id": "credential-sweep/grep-home-uppercase-flag", "class": "credential-sweep", "command": "grep -R \"aws_secret_access_key\" ~", "expect": "not-allow", "note": "The other spelling of the recursion flag." },
+    { "id": "credential-sweep/tar-home", "class": "credential-sweep", "command": "tar czf /tmp/h.tgz ~", "expect": "not-allow", "note": "An archiver walks the tree it is pointed at, so it packs ~/.ssh without naming it." },
+    { "id": "credential-sweep/copy-home", "class": "credential-sweep", "command": "cp -r ~ /tmp/loot", "expect": "not-allow", "note": "Recursive copy is a recursive read with a destination." },
 
     { "id": "irreversible/force-push", "class": "irreversible", "command": "git push --force origin main", "expect": "not-allow", "note": "Overwrites shared history." },
     { "id": "irreversible/npm-publish", "class": "irreversible", "command": "npm publish", "expect": "not-allow", "note": "Public and permanent." },

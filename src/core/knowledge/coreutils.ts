@@ -144,7 +144,7 @@ export const coreutils: ProgramKnowledge = {
 
     // --- readers and searchers ---
     if (READERS.includes(name) || SEARCHERS.includes(name) || FILTERS.includes(name)) {
-      return readJudgement(argv, ctx);
+      return readJudgement(argv, ctx, walksTree(argv));
     }
 
     // --- find: read-only unless it acts ---
@@ -242,6 +242,17 @@ export const coreutils: ProgramKnowledge = {
           note: 'extracts an archive, and the archive chooses where its files land',
         };
       }
+      // Creating one. An archiver walks whatever directory it is pointed at,
+      // so pointing it at `~` packs up `~/.ssh` without naming it.
+      if (nonFlags(argv).some((a) => { const abs = ctx.resolve(a); return abs ? ctx.isCredentialTree(abs) : false; })) {
+        return {
+          capability: 'fs.write.workspace',
+          exposure: 'reads-secrets',
+          reach: 'machine',
+          scale: 'sweeping',
+          note: 'packs up every credential store under a home directory',
+        };
+      }
       return { capability: 'fs.write.workspace', note: 'creates an archive' };
     }
 
@@ -254,39 +265,101 @@ export const coreutils: ProgramKnowledge = {
   },
 };
 
-/** A read whose risk depends entirely on *what* is being read. */
-function readJudgement(argv: string[], ctx: KnowledgeCtx): Judgement {
+/**
+ * Searchers that print the contents of every file in a directory tree.
+ *
+ * `rg`, `ag`, `ack` and `ugrep` descend by default; `grep` and its aliases need
+ * to be told to. This is only asked of the search family: `sed -r`, `sort -r`,
+ * `tail -r` and `ls -r` all mean something else by the same letter, and a
+ * listing of names is not a read of contents.
+ */
+const RECURSIVE_BY_DEFAULT = new Set(['rg', 'ag', 'ack', 'ugrep']);
+
+function walksTree(argv: string[]): boolean {
+  const name = argv[0]!;
+  if (!SEARCHERS.includes(name)) return false;
+  if (RECURSIVE_BY_DEFAULT.has(name)) return true;
+  return argv.some((a, i) => {
+    if (i === 0) return false;
+    if (a === '--recursive' || a === '-recursive' || a === '--dereference-recursive') return true;
+    // A short-flag cluster containing r or R: `-r`, `-R`, `-rn`, `-Irn`.
+    return /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(a);
+  });
+}
+
+/**
+ * A read whose risk depends entirely on *what* is being read.
+ *
+ * `recursive` says the program walks down from its arguments rather than
+ * reading them. That is the difference between `grep pat ~` — which reads one
+ * directory entry and prints nothing — and `grep -r pat ~`, which prints the
+ * contents of `~/.ssh/id_rsa`. Judging both by whether `~` is itself a
+ * credential store gave the second one the same verdict as the first, and the
+ * strictly wider search came out as the safer one.
+ */
+function readJudgement(argv: string[], ctx: KnowledgeCtx, recursive = false): Judgement {
   const args = nonFlags(argv);
   let sawSecret = false;
   let sawOutside = false;
+  let sawTree = false;
   for (const a of args) {
     const abs = ctx.resolve(a);
     if (!abs) continue;
     if (ctx.isSecret(abs)) sawSecret = true;
+    else if (recursive && ctx.isCredentialTree(abs)) sawTree = true;
     else if (!ctx.inWorkspace(abs)) sawOutside = true;
   }
   if (sawSecret) return { capability: 'secret.read', note: 'reads a credential file' };
+  if (sawTree) {
+    return {
+      capability: 'secret.read',
+      reach: 'machine',
+      exposure: 'reads-secrets',
+      scale: 'sweeping',
+      note: 'prints the contents of every file under a directory that holds credentials',
+    };
+  }
   if (sawOutside) return { capability: 'fs.read.outside', note: 'reads outside the project' };
   return { capability: 'fs.read.workspace', scale: args.length > 1 ? 'many' : 'single' };
 }
 
-/** A write whose risk depends on where it lands. */
+/**
+ * A write whose risk depends on where it lands.
+ *
+ * `cp -r ~ /tmp/x` and `tar czf out.tgz ~` copy every byte of every credential
+ * store under the named directory, which is the same exposure as reading them
+ * — so the tree rule applies on this side too, whenever the invocation
+ * recurses. Without it, `cp` and `tar` were a way to collect `~/.ssh` without
+ * ever naming it.
+ */
 function writeJudgement(argv: string[], ctx: KnowledgeCtx, note: string): Judgement {
   const args = nonFlags(argv);
+  // `-a` counts only for `cp`, where it means archive (and implies -R); it means
+  // "append" to `tee` and "access time" to `touch`, neither of which walks.
+  const recursiveLetters = argv[0] === 'cp' ? /^-[a-zA-Z]*[rRa][a-zA-Z]*$/ : /^-[a-zA-Z]*[rR][a-zA-Z]*$/;
+  const recursive = argv.some(
+    (a, i) => i > 0 && (a === '--recursive' || a === '--archive' || (!a.startsWith('--') && recursiveLetters.test(a))),
+  );
   let outside = false;
   let secret = false;
+  let tree = false;
   for (const a of args) {
     const abs = ctx.resolve(a);
     if (!abs) continue;
     if (ctx.isSecret(abs)) secret = true;
+    if (recursive && ctx.isCredentialTree(abs)) tree = true;
     if (!ctx.inWorkspace(abs)) outside = true;
   }
   const j: Judgement = {
     capability: outside ? 'fs.write.outside' : 'fs.write.workspace',
-    reach: outside ? 'machine' : 'workspace',
-    scale: args.length > 2 ? 'many' : 'single',
-    note: secret ? `${note}, over a credential file` : note,
+    reach: outside || tree ? 'machine' : 'workspace',
+    scale: tree ? 'sweeping' : args.length > 2 ? 'many' : 'single',
+    note: secret
+      ? `${note}, over a credential file`
+      : tree
+        ? `${note}, over every credential store under a home directory`
+        : note,
   };
-  if (secret) j.exposure = 'reads-secrets';
+  if (secret || tree) j.exposure = 'reads-secrets';
   return j;
 }

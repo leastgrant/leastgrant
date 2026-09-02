@@ -339,6 +339,32 @@ list badly. The real categories:
   `.claude/skills`. These are not settings, they are instructions a future session
   will follow as if you had typed them.
 - **`AGENTS.md`, `CLAUDE.md`, `.cursorrules`**, for the same reason.
+- **Anything with the *shape* of an agent-instruction file**, matched by pattern
+  rather than by name. The literal list above is a snapshot of what the vendors
+  called these files when it was written, and almost all of them have since moved:
+  `.cursorrules` became `.cursor/rules/*.mdc`, Copilot's instructions are
+  `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md`,
+  Claude Code grew `.claude/rules/` and `.claude/output-styles/`, and Windsurf,
+  Cline, Roo and Devin each ship a `.<vendor>/rules/` directory. Every one of those
+  was ALLOWed, and — because an in-project write signs as the plain `Write(<path>)`
+  that ordinary source edits also sign as — a handful of approvals of editing
+  `src/app.ts` was enough to make writing them a silent allow. Three patterns cover
+  the family: a dotfile or dot-directory whose name ends in `rules`; anything under
+  a vendor dot-directory's instruction surface (`rules`, `commands`, `agents`,
+  `skills`, `prompts`, `instructions`, `chatmodes`, `output-styles`, `hooks`,
+  `workflows`); and a file recognised by its suffix (`*.instructions.md`,
+  `*-instructions.md`, `*.prompt.md`, `*.chatmode.md`, `*.mdc`).
+
+Deliberately **not** on the list: `Makefile`, `justfile`, `Taskfile.yml`,
+`noxfile.py`, `setup.py`, `build.rs`. They look like the `package.json` case — an
+edit to what a later approved command will run — but that is backwards. `package.json`
+is floored precisely because `npm test` *is* learnable; `make`, `just`, `task`, `nox`
+and `python setup.py` are opaque runners that stay `understood: false` and never become
+approvable however often you approve them, so a poisoned Makefile can never be cashed
+in through an already-trusted command. Flooring them would buy nothing and put a prompt
+on a very common edit. Measured, not assumed — `test/audit-regressions.test.ts` asserts
+that those five runners are still unapprovable after 60 confirmations, and will fail if
+that ever changes.
 
 Ask, not deny, because these are files you edit by hand all the time. `package.json`
 is the entry that costs real friction: on a JavaScript project the agent touches it
@@ -794,8 +820,8 @@ attacker would aim at."
 `<path:outside>` used to be a single equivalence class: every path outside the
 workspace not recognised as a secret collapsed into one token, so approving a single
 out-of-project read taught LeastGrant to allow any of them. `outsideZone()` in
-`src/core/signature.ts` now splits it by region — `etc`, `system`, `runtime`, `temp`,
-`home`, `other`. Actual output:
+`src/core/signature.ts` now splits it by region — `credential-tree`, `etc`, `system`,
+`runtime`, `temp`, `home`, `other`. Actual output:
 
 ```
 train:  cat /etc/hosts   x11 human approvals, 2+ days, 2+ sessions
@@ -829,6 +855,16 @@ its `SECRET_DIRS`, `SECRET_FILES` and `SECRET_EXTS` lists are what keep `/etc/sh
 and `~/.ssh/id_rsa` in a different bucket from `/etc/hosts`. Any credential-bearing
 file those lists do not recognise is inside the same equivalence class as the one you
 approved. You can extend the lists with `secretPatterns` in your config.
+
+`credential-tree` is the zone that is *not* a region: it holds exactly the directories
+that sit above a credential store — `~`, `~/.config`, `/home`, `/Users/alice`, `/etc`,
+`C:\`, `/`. It exists because the region split was not enough on its own. `~` and
+`~/Documents` were both `home`, so twenty approvals of `grep -r <phrase> ~/Documents`
+promoted the signature that `grep -r "BEGIN OPENSSH PRIVATE KEY" ~` also carried — and
+`~` is not itself a credential store, so the wider search tripped no floor either. A
+recursive read of a `credential-tree` root is now classified `secret.read`, which is
+unlearnable; a recursive read of anything else is unchanged, including every
+`grep -r` inside the project.
 
 Templating per-file would mean learning nothing, and a tool that learns nothing gets
 uninstalled. But you should know what you are agreeing to when you approve an

@@ -22,6 +22,7 @@
  */
 
 import { UNRESOLVED } from './shell/tokenize.js';
+import { credentialTreeRoot } from './secrets.js';
 
 export interface SignatureCtx {
   resolve(arg: string): string;
@@ -119,6 +120,18 @@ export function assignmentSignature(
  */
 export function outsideZone(abs: string): string {
   const p = abs.replace(/\\/g, '/').toLowerCase();
+  // A directory that *contains* credential stores is its own zone, tested
+  // first because it is a property of the exact path and the rules below are
+  // prefix rules: `/etc/nginx` is `etc`, but `/etc` itself, `~`, `/home`,
+  // `/Users/someone` and `C:\` each sit above somebody's keys.
+  //
+  // Without this, `~` and `~/Documents` were one learned thing, so twenty
+  // approvals of `grep -r <phrase> ~/Documents` auto-approved
+  // `grep -r "BEGIN OPENSSH PRIVATE KEY" ~`. Splitting the token is the half of
+  // that fix which does not depend on recognising the recursion: even a walker
+  // LeastGrant does not know is recursive can no longer spend a scoped
+  // search's trust on the whole home directory.
+  if (credentialTreeRoot(abs).secret) return 'credential-tree';
   if (/^([a-z]:)?\/(etc|private\/etc)\b/.test(p)) return 'etc';
   if (/^([a-z]:)?\/(usr|opt|bin|sbin|lib)\b/.test(p)) return 'system';
   if (/^([a-z]:)?\/(var|proc|sys|dev)\b/.test(p)) return 'runtime';

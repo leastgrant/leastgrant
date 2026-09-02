@@ -56,9 +56,15 @@ process.env['USERPROFILE'] = HOME_DIR;
 
 // Imported *after* the environment is pointed at the fake home, because
 // secrets.ts resolves os.homedir() once at module load.
-const { classifySecretPath, containsSecretLike, globMatch, redact, shannon } = await import(
-  '../src/core/secrets.js'
-);
+const {
+  classifySecretPath,
+  containsSecretLike,
+  credentialTreeRoot,
+  globMatch,
+  nameRules,
+  redact,
+  shannon,
+} = await import('../src/core/secrets.js');
 
 after(() => {
   if (PREV_HOME === undefined) delete process.env['HOME'];
@@ -255,6 +261,93 @@ describe('classifySecretPath leaves ordinary files alone', () => {
     // `.env.example` is safe because of where it is, not just what it is called.
     assert.equal(classifySecretPath(home('.ssh', 'id_rsa.example')).secret, true);
     assert.equal(classifySecretPath(home('.aws', 'credentials.sample')).secret, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifySecretPath — spelling, and the one rule that forgot to fold case
+// ---------------------------------------------------------------------------
+
+describe('name rules do not depend on how the caller typed the file', () => {
+  // The audit found `/^SAM$|^SECURITY$/` — the Windows registry hives — was the
+  // only entry in SECRET_FILES without the `i` flag, so `…/config/sam` read as
+  // an ordinary file outside the project while `…/config/SAM` was floored.
+  //
+  // This asserts the property rather than the instance. A test that spells out
+  // `sam` and `SAM` proves nothing about the next entry somebody adds; this one
+  // fails the moment a case-sensitive name rule appears in the file at all.
+  test('every name and extension rule carries the i flag', () => {
+    const bare = nameRules().filter((rx) => !rx.flags.includes('i'));
+    assert.deepEqual(
+      bare.map((rx) => String(rx)),
+      [],
+      'a basename rule that does not fold case is a rule the lower-case spelling walks past',
+    );
+  });
+
+  test('the registry hives are credentials in either spelling', () => {
+    for (const dir of ['C:/Windows/System32/config', 'c:/windows/system32/config', 'D:/Windows/Sysnative/config']) {
+      for (const name of ['SAM', 'sam', 'SECURITY', 'security', 'SYSTEM', 'system', 'SOFTWARE']) {
+        const r = classifySecretPath(`${dir}/${name}`);
+        assert.equal(r.secret, true, `${dir}/${name} did not read as a credential hive`);
+        assert.equal(r.tag, 'system');
+      }
+    }
+  });
+
+  test('a hive dumped somewhere else is still a hive', () => {
+    // The live files are kernel-locked, so the copy is what actually gets
+    // exfiltrated: `reg save HKLM\\SAM sam`, a VSS snapshot, a backup.
+    for (const p of [ws('loot', 'sam'), ws('loot', 'SAM'), ws('ntds.dit'), ws('security.sav'), ws('system.hiv')]) {
+      assert.equal(classifySecretPath(p).secret, true, `${p} did not read as a credential hive`);
+    }
+  });
+
+  test('but an ordinary directory named after an English word is not a hive', () => {
+    // The reason `SECURITY`, `SYSTEM` and `SOFTWARE` are scoped to the registry
+    // directory instead of matched by basename anywhere. Flagging `linux/
+    // security/` would put an unlearnable prompt on every recursive read of a
+    // kernel tree, which is the crying-wolf failure this module exists to
+    // avoid.
+    for (const p of [ws('security'), ws('src', 'security'), ws('system'), ws('src', 'system'),
+      ws('software'), ws('config', 'default'), ws('SECURITY.md')]) {
+      assert.equal(classifySecretPath(p).secret, false, `${p} was wrongly read as a credential`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// credentialTreeRoot — what a recursive read would sweep up
+// ---------------------------------------------------------------------------
+
+describe('credentialTreeRoot names the directories a recursive read must not sweep', () => {
+  test('a directory above a credential store is one', () => {
+    for (const p of [slash(HOME_DIR), slash(path.dirname(HOME_DIR)), '/', '/home', '/home/bob',
+      '/Users', '/Users/alice', '/etc', '/private/etc', '/root', 'C:/', 'C:/Users',
+      // Not only the obvious ones: `~/.config` is above `~/.config/gcloud`,
+      // `~/.config/gh` and the 1Password CLI's state.
+      home('.config'), home('.local'), home('.local', 'share')]) {
+      assert.equal(credentialTreeRoot(p).secret, true, `${p} should be a credential tree root`);
+    }
+  });
+
+  test('an ordinary directory, however far outside the project, is not', () => {
+    // The control. Answering true everywhere would satisfy the assertion above
+    // and turn every recursive search on the machine into an unlearnable ask.
+    for (const p of [home('Documents'), home('code'), home('.cache'), home('.config', 'nvim'),
+      ws(), ws('src'),
+      '/etc/nginx', '/root/scratch', '/home/bob/code', '/usr', '/usr/share', '/var/log',
+      '/tmp', '/opt/app', 'C:/Program Files']) {
+      assert.equal(credentialTreeRoot(p).secret, false, `${p} should not be a credential tree root`);
+    }
+  });
+
+  test('the home directory itself is a tree root, its children are not', () => {
+    // The exact asymmetry the audit turned into an ALLOW: `~` and `~/Documents`
+    // were the same thing to the engine, so approvals of the second paid for
+    // the first.
+    assert.equal(credentialTreeRoot(home()).secret, true);
+    assert.equal(credentialTreeRoot(home('Documents')).secret, false);
   });
 });
 

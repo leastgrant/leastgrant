@@ -652,8 +652,10 @@ Flags are kept, because they change behaviour, and sorted, because their order d
 values are normalized like positional arguments, so `--output=/tmp/x` becomes
 `--output=<path:outside:temp>`.
 
-**Outside is not one place.** `outsideZone` splits the outside token six ways —
-`<path:outside:etc>`, `:system`, `:runtime`, `:temp`, `:home` and `:other`, from
+**Outside is not one place.** `outsideZone` splits the outside token seven ways —
+`<path:outside:credential-tree>`, `:etc`, `:system`, `:runtime`, `:temp`, `:home` and
+`:other`, from a directory that sits *above* somebody's credentials (`~`, `/home`,
+`/Users/alice`, `/etc`, `C:\`, `/`);
 `/etc`; `/usr` `/opt` `/bin` `/sbin` `/lib` plus `C:\Windows` and `C:\Program Files`;
 `/var` `/proc` `/sys` `/dev`; anything under a `tmp` or `temp` directory; anything under
 `/home` or `/Users`; and everything left over. Every outside path used to collapse into a
@@ -663,6 +665,13 @@ the useful case — a build that reads
 `/usr/share/...` on every run still settles — without letting that approval spread to a home
 directory or a system config. It is deliberately coarse: a per-directory token would never
 accumulate enough evidence to settle, which is its own failure mode.
+
+The `credential-tree` zone is the one exception to "coarse". `~` and `~/Documents` were both
+`:home`, so twenty approvals of `grep -r <phrase> ~/Documents` bought
+`grep -r "BEGIN OPENSSH PRIVATE KEY" ~` — the strictly wider search, sharing the narrower
+one's identity. A directory that contains a credential store is now its own class, which
+means an approval of a scoped search can never pay for the whole home directory, whether or
+not LeastGrant recognises the tool as recursive.
 
 **A SQL verb survives templating.** This is the one exception to the `<text>` row above, and
 it is there because `psql -c "SELECT 1"` and `psql -c "DROP TABLE users"` are both long

@@ -63,8 +63,25 @@ const SECRET_DIRS: { rel: string; why: string; tag: string }[] = [
   { rel: 'AppData/Local/Microsoft/Credentials', why: 'Windows stored credentials live here', tag: 'wincred' },
 ];
 
-/** Exact filenames, matched anywhere. */
-const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = [
+/**
+ * Force the `i` flag onto a name pattern.
+ *
+ * Every rule below is matched against a basename, and NTFS and APFS are
+ * case-insensitive, so `sam` and `SAM` are the same file. One entry
+ * (`/^SAM$|^SECURITY$/`, the Windows registry hives) was written without the
+ * flag, and that single missing character was the whole difference between
+ * "credential hive, floored" and "ordinary file outside the project,
+ * learnable" — the lower-case spelling of a locked hive is exactly what
+ * `reg save` writes.
+ *
+ * Adding `i` to that one entry would have fixed the instance. Folding the flag
+ * on structurally fixes the class: it is no longer *possible* to add a
+ * case-sensitive name rule to this file by forgetting a character.
+ */
+const ci = (rx: RegExp): RegExp => (rx.flags.includes('i') ? rx : new RegExp(rx.source, rx.flags + 'i'));
+
+/** Exact filenames, matched anywhere. Case-insensitive, always — see {@link ci}. */
+const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = ([
   // Credential stores found by the audit. Each of these was an auto-approvable
   // read of somebody's password store.
   { name: /^\.vault-token$/i, why: 'this is a HashiCorp Vault token', tag: 'vault' },
@@ -83,7 +100,23 @@ const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = [
   { name: /^gshadow$/i, why: 'this holds group password hashes', tag: 'system' },
   { name: /^sudoers$/i, why: 'this decides who can act as root', tag: 'system' },
   { name: /^master\.passwd$/i, why: 'this holds system password hashes', tag: 'system' },
-  { name: /^SAM$|^SECURITY$/, why: 'this is a Windows registry credential hive', tag: 'system' },
+  // Windows credential hives, in the spellings that are not also ordinary
+  // words. `SAM` is the account database and `NTDS.dit` is its domain
+  // equivalent; neither is a plausible name for a source directory. A copy
+  // saved out of the registry keeps the hive name and gains an extension.
+  //
+  // `SECURITY`, `SYSTEM` and `SOFTWARE` are hives too, and they deliberately
+  // are NOT here: matched by basename anywhere and folded case-insensitive,
+  // they would classify `linux/security/`, `src/system/` and every other
+  // directory named after an English word as a credential store. Those are
+  // recognised by {@link HIVE_DIR} instead, where they really are the hives.
+  { name: /^sam$/i, why: 'this is a Windows registry credential hive', tag: 'system' },
+  { name: /^ntds\.dit$/i, why: 'this is the Active Directory credential database', tag: 'system' },
+  {
+    name: /^(?:sam|security|system|software|default)\.(?:sav|bak|old|hiv|hive|save|dmp)$/i,
+    why: 'this is a saved copy of a Windows registry credential hive',
+    tag: 'system',
+  },
   { name: /^\.env(\..*)?$/i, why: 'environment files usually hold secrets', tag: 'dotenv' },
   { name: /^\.npmrc$/i, why: 'npm auth tokens live here', tag: 'npm' },
   { name: /^\.yarnrc\.yml$/i, why: 'yarn auth tokens can live here', tag: 'yarn' },
@@ -113,7 +146,17 @@ const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = [
   // Shell history is a well-known place for secrets to end up by accident.
   { name: /^\.(bash|zsh|psql|mysql|node_repl|python)_history$/i, why: 'shell history often contains pasted secrets', tag: 'history' },
   { name: /^\.dbeaver-data-sources\.xml$/i, why: 'database credentials live here', tag: 'db' },
-];
+] as { name: RegExp; why: string; tag: string }[]).map((f) => ({ ...f, name: ci(f.name) }));
+
+/**
+ * The registry's own directory, where the hive files really are the hives.
+ *
+ * Scoping the generic hive names to this directory is what lets `SECURITY`,
+ * `SYSTEM` and `SOFTWARE` be recognised case-insensitively without turning
+ * every repository's `security/` folder into a credential store.
+ */
+const HIVE_DIR = /\/(?:system32|sysnative|winnt\/system32)\/(?:config|repair)\//i;
+const HIVE_NAME = /^(?:sam|security|system|software|default|components)(?:\.(?:sav|bak|old|log\d*))?$/i;
 
 /**
  * Names that *look* credential-shaped but are deliberately committed templates.
@@ -125,13 +168,13 @@ const SECRET_FILES: { name: RegExp; why: string; tag: string }[] = [
  * `id_rsa.example` sitting inside `~/.ssh` is still caught by the directory
  * rules further down.
  */
-const TEMPLATE_NAME = /\.(example|sample|template|dist|defaults?|tpl)$/i;
+const TEMPLATE_NAME = ci(/\.(example|sample|template|dist|defaults?|tpl)$/i);
 
-/** Extensions that are private keys or credential bundles. */
-const SECRET_EXTS: { ext: RegExp; why: string; tag: string }[] = [
+/** Extensions that are private keys or credential bundles. Case-insensitive, always. */
+const SECRET_EXTS: { ext: RegExp; why: string; tag: string }[] = ([
   { ext: /\.(pem|key|p12|pfx|jks|keystore|asc|gpg|ppk)$/i, why: 'this is a key or certificate file', tag: 'key' },
   { ext: /\.kdbx?$/i, why: 'this is a password database', tag: 'passwords' },
-];
+] as { ext: RegExp; why: string; tag: string }[]).map((e) => ({ ...e, ext: ci(e.ext) }));
 
 const HOME = (() => {
   try {
@@ -160,6 +203,9 @@ export function classifySecretPath(abs: string, extra: string[] = []): SecretMat
     }
     for (const e of SECRET_EXTS) {
       if (e.ext.test(base)) return { secret: true, why: e.why, tag: e.tag };
+    }
+    if (HIVE_DIR.test(p) && HIVE_NAME.test(base)) {
+      return { secret: true, why: 'this is a Windows registry credential hive', tag: 'system' };
     }
   }
 
@@ -200,6 +246,81 @@ export function classifySecretPath(abs: string, extra: string[] = []): SecretMat
   return NOT_SECRET;
 }
 
+/**
+ * The absolute directories that hold credentials, as places rather than as
+ * names — every `SECRET_DIRS` entry resolved against `$HOME`, plus the system
+ * stores that hold the files `SECRET_FILES` names.
+ *
+ * Used only by {@link credentialTreeRoot}. Computed once, because `HOME` is
+ * read once (see the note on `HOME` above).
+ */
+const CREDENTIAL_ANCHORS: string[] = (() => {
+  const out: string[] = [];
+  const h = HOME ? norm(HOME).replace(/\/+$/, '').toLowerCase() : '';
+  if (h) for (const d of SECRET_DIRS) out.push(`${h}/${d.rel.toLowerCase()}`);
+  // POSIX system credential stores: /etc holds shadow, gshadow and sudoers;
+  // root's home holds root's keys.
+  out.push('/etc', '/private/etc', '/root', '/var/root');
+  // The Windows registry hives, on whichever drive the user lives.
+  const drive = /^([a-z]:)\//.exec(h)?.[1] ?? 'c:';
+  out.push(`${drive}/windows/system32/config`);
+  return out;
+})();
+
+/**
+ * Directories that *contain* other users' credential stores. A recursive read
+ * of any of these, or of any one home inside them, sweeps up `~/.ssh` for
+ * whoever lives there.
+ */
+const HOME_CONTAINERS: string[] = ['/home', '/users', 'c:/users'];
+// Containers only, and only the three whose children are homes by definition.
+//
+// `/root` is a home, not a container of homes — listing it would make every
+// `/root/<subdir>` read as somebody's home. It is an anchor above instead.
+//
+// This deliberately does not include whatever `dirname($HOME)` happens to be.
+// That directory is already a sweep root, because it is a strict ancestor of
+// `$HOME/.ssh` and the anchor check catches it; adding it here would go
+// further and declare all of its *children* to be homes, which is only true
+// when it really is a user-profile directory.
+
+/**
+ * Is a *recursive* read rooted here certain to descend into credentials?
+ *
+ * `grep -r "BEGIN OPENSSH PRIVATE KEY" ~/.ssh` was floored and
+ * `grep -r "BEGIN OPENSSH PRIVATE KEY" ~` was not — the strictly wider search
+ * was the safer one, because the judgement looked only at the single path on
+ * the command line and `~` is not itself a credential store. Naming the parent
+ * directory was enough to evade the floor, and `~` collapses onto the same
+ * `<path:outside:home>` token as `~/Documents`, so approvals of an ordinary
+ * scoped search paid for the whole-home one.
+ *
+ * This answers the question the path alone cannot: does walking down from here
+ * reach `~/.ssh`, `~/.aws`, `/etc/shadow`, the registry hives? It is
+ * deliberately about *certainty*, not possibility — any directory might have a
+ * `.env` buried in it, and a rule that fired on that would flag every recursive
+ * search in the world. It fires only for the ancestors of stores that exist by
+ * platform convention: `~`, `/home`, `/Users`, another user's home, `/etc`, a
+ * drive root, `/`.
+ *
+ * Reads that are already secret by path are not this function's business;
+ * `classifySecretPath` answers those.
+ */
+export function credentialTreeRoot(abs: string): SecretMatch {
+  if (!abs) return NOT_SECRET;
+  const p = norm(abs).replace(/\/+$/, '').toLowerCase() || '/';
+  const prefix = p === '/' ? '/' : p + '/';
+  for (const a of CREDENTIAL_ANCHORS) {
+    if (a === p || a.startsWith(prefix)) {
+      return { secret: true, why: 'everything under here includes credential stores', tag: 'tree' };
+    }
+  }
+  if (HOME_CONTAINERS.includes(p) || HOME_CONTAINERS.includes(path.posix.dirname(p))) {
+    return { secret: true, why: 'this is a home directory, and home directories hold credentials', tag: 'tree' };
+  }
+  return NOT_SECRET;
+}
+
 const AGENT_DIRS = ['.claude', '.codex', '.cursor', '.gemini', '.continue', '.aider', '.copilot'];
 
 const AGENT_CREDENTIAL_FILES = [
@@ -208,7 +329,25 @@ const AGENT_CREDENTIAL_FILES = [
   /^auth\.json$/i,
   /^\.credentials\.json$/i,
   /^mcp\.json$/i,
-];
+].map(ci);
+
+/**
+ * The patterns this module matches against a basename, exposed so a test can
+ * assert the property rather than the instances: every one of them folds case.
+ *
+ * A test that spells out `sam` and `SAM` proves nothing about the next entry
+ * somebody adds. This lets the suite check the invariant itself.
+ */
+export function nameRules(): RegExp[] {
+  return [
+    ...SECRET_FILES.map((f) => f.name),
+    ...SECRET_EXTS.map((e) => e.ext),
+    ...AGENT_CREDENTIAL_FILES,
+    TEMPLATE_NAME,
+    HIVE_DIR,
+    HIVE_NAME,
+  ];
+}
 
 /** Minimal glob: `*` matches within a segment, `**` matches across segments. */
 export function globMatch(pattern: string, value: string): boolean {
