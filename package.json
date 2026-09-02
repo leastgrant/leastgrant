@@ -40,7 +40,8 @@
     "release:check": "node scripts/release-rehearsal.mjs",
     "site:build": "npm run build && node site/build.mjs",
     "site:serve": "node site/serve.mjs",
-    "site:test": "npm run site:build && node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/server.test.mjs"
+    "site:test": "npm run site:build && node --test site/test/markdown.test.mjs site/test/brand.test.mjs site/test/build.test.mjs site/test/server.test.mjs",
+    "gen:readme": "node scripts/gen-readme.mjs"
   },
   "keywords": [
     "ai-agent",

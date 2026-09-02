@@ -454,7 +454,12 @@ describe('the site does not invent facts', () => {
     let hedged = 0;
     for (const [, agent, status] of rows) {
       assert.ok(agents.includes(status), `the agents page dropped "${status}" for ${agent}`);
-      if (/not yet verified|unverified|not yet/i.test(status)) hedged++;
+      // "Partial" is the current vocabulary for a hedge, and it is a stronger
+      // one than the prose it replaced: it comes from compatibility/<agent>.json
+      // and carries a specific list of what is not covered, rather than a
+      // sentence somebody wrote. Cursor is Partial because writes are not
+      // intercepted at all and reads are seen after the fact.
+      if (/not yet verified|unverified|not yet|partial/i.test(status)) hedged++;
     }
     // And at least one hedge should still exist. If every integration is
     // suddenly "tested end to end", that is worth a human looking at.

@@ -120,7 +120,7 @@
   ],
   "leastgrantLimitations": [
     "Never run inside a live Cursor session. The contract is verified against the shipped 3.18.25 bundle; the integration is not verified at all.",
-    "The installer does not set failClosed, so LeastGrant fails open on its own crash where Cursor would allow it to fail closed.",
+    "Never run inside a live Cursor session. The installer sets `failClosed` on the three gating events, and Cursor turns malformed hook output into a deny, so LeastGrant fails closed here — but both of those are read from the shipped bundle rather than observed in a running session.",
     "Reads and MCP calls are covered; writes are not, so the support level is partial rather than enforcing."
   ]
 }
