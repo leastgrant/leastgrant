@@ -142,3 +142,68 @@ describe('an unreadable config is not a quiet reset to the defaults', () => {
     assert.deepEqual(cfg.rules, []);
   });
 });
+
+describe('forgetting learned evidence actually removes it', () => {
+  // `saveEnvelope` re-reads the file and merges before writing, so two hook
+  // processes racing cannot lose each other's evidence. That merge starts from
+  // what is on disk and only ever adds — right for concurrency, and exactly
+  // wrong for a person typing `leastgrant forget --learned`, which deleted the
+  // signature from the in-memory envelope and had it restored on the way out.
+  // The command reported success and forgot nothing.
+  const withStore = async <T>(fn: (api: typeof import('../src/store/index.js')) => Promise<T> | T): Promise<T> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'leastgrant-forget-'));
+    const prev = process.env['LEASTGRANT_HOME'];
+    process.env['LEASTGRANT_HOME'] = dir;
+    try {
+      return await fn(await import('../src/store/index.js'));
+    } finally {
+      if (prev === undefined) delete process.env['LEASTGRANT_HOME'];
+      else process.env['LEASTGRANT_HOME'] = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const NIL = { reach: 'workspace', reversibility: 'easy', exposure: 'none', scale: 'single' } as const;
+
+  test('a deleted signature stays deleted when it is named', async () => {
+    await withStore(async ({ saveEnvelope, loadEnvelope }) => {
+      const { newEnvelope, observe } = await import('../src/core/envelope.js');
+      const seed = newEnvelope('project', 'proj');
+      for (const sig of ['npm test', 'git status']) {
+        observe(seed, {
+          signature: sig, capability: 'exec.test', blast: NIL,
+          evidence: 'confirmed', at: 1_760_000_000_000, sessionId: 's', display: sig,
+        });
+      }
+      saveEnvelope(seed);
+
+      const before = loadEnvelope('project', 'proj');
+      delete before.signatures['npm test'];
+      saveEnvelope(before, { forget: ['npm test'] });
+
+      const after = loadEnvelope('project', 'proj');
+      assert.deepEqual(Object.keys(after.signatures), ['git status']);
+    });
+  });
+
+  test('and comes back when it is not, which is the concurrency guarantee', async () => {
+    // Asserted so the merge is not quietly removed later: an unnamed deletion
+    // must still lose to what is on disk, or a hook writing concurrently with a
+    // forget could have its evidence dropped.
+    await withStore(async ({ saveEnvelope, loadEnvelope }) => {
+      const { newEnvelope, observe } = await import('../src/core/envelope.js');
+      const seed = newEnvelope('project', 'proj2');
+      observe(seed, {
+        signature: 'npm test', capability: 'exec.test', blast: NIL,
+        evidence: 'confirmed', at: 1_760_000_000_000, sessionId: 's', display: 'npm test',
+      });
+      saveEnvelope(seed);
+
+      const before = loadEnvelope('project', 'proj2');
+      delete before.signatures['npm test'];
+      saveEnvelope(before);
+
+      assert.deepEqual(Object.keys(loadEnvelope('project', 'proj2').signatures), ['npm test']);
+    });
+  });
+});

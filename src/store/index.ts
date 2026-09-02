@@ -25,7 +25,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Config, Envelope, LedgerEntry, Rule, Scope } from '../core/types.js';
+import type { Config, Envelope, LedgerEntry, Rule, Scope, SignatureStat } from '../core/types.js';
 import { NIL_BLAST } from '../core/types.js';
 import { newEnvelope, safeSignatureKey } from '../core/envelope.js';
 import { DEFAULT_THRESHOLDS } from '../core/envelope.js';
@@ -287,7 +287,33 @@ function mergeEnvelopes(disk: Envelope, mine: Envelope): Envelope {
   return out;
 }
 
-export function saveEnvelope(env: Envelope): void {
+export interface SaveEnvelopeOptions {
+  /**
+   * Signatures the caller has deliberately removed, which the merge must not
+   * bring back.
+   *
+   * The merge starts from what is on disk and only ever adds, which is right
+   * for two hook processes racing — neither can lose the other's denial — and
+   * exactly wrong for a person typing `leastgrant forget --learned`. That
+   * deleted the signature from the in-memory envelope, and the merge restored
+   * it from disk on the way out, so the command reported success and forgot
+   * nothing. A tool that says it deleted your data and did not is worse than
+   * one that refuses.
+   *
+   * Naming them, rather than adding a "do not merge" flag, keeps the
+   * concurrency guarantee for everything else in the same write: a hook that
+   * records a denial while `forget` is running still cannot be clobbered,
+   * unless it is a denial of one of these exact signatures.
+   *
+   * A refusal still outlives this. Denials are journaled separately and
+   * replayed over the envelope on load, because "a no does not expire" is a
+   * promise the product makes in plain words — `forget --learned` unlearns
+   * approvals, and to drop a refusal you have to write a rule.
+   */
+  forget?: readonly string[];
+}
+
+export function saveEnvelope(env: Envelope, opts: SaveEnvelopeOptions = {}): void {
   const file = env.scope === 'global' ? path.join(stateDir(), 'global.json') : paths.envelope(env.key);
   ensureDir(path.dirname(file));
   // Re-read immediately before writing and merge, so a concurrent session's
@@ -296,7 +322,15 @@ export function saveEnvelope(env: Envelope): void {
     if ((stat?.denied ?? 0) > 0) recordDenial(env.scope, env.key, stat.signature || sig, stat.lastSeen ?? 0);
   }
   const disk = loadEnvelope(env.scope, env.key);
-  const merged = disk.events || Object.keys(disk.signatures).length ? mergeEnvelopes(disk, env) : env;
+  let merged = disk.events || Object.keys(disk.signatures).length ? mergeEnvelopes(disk, env) : env;
+  if (opts.forget?.length) {
+    const gone = new Set(opts.forget.map(safeSignatureKey));
+    const kept: Record<string, SignatureStat> = Object.create(null) as Record<string, SignatureStat>;
+    for (const [sig, stat] of Object.entries(merged.signatures)) {
+      if (!gone.has(sig)) kept[sig] = stat;
+    }
+    merged = { ...merged, signatures: kept };
+  }
   writeAtomic(file, JSON.stringify(merged));
 }
 

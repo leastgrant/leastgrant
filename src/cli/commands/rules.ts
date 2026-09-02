@@ -327,7 +327,11 @@ function forget(argv: Argv, ctx: CliContext, json: boolean): number {
       forgotten++;
     }
     env.updatedAt = now;
-    saveEnvelope(env);
+    // Name what was removed. `saveEnvelope` merges with what is on disk so two
+    // racing hooks cannot lose each other's evidence, and that merge only ever
+    // adds — so without this the signatures deleted above came straight back
+    // and `forget` reported a success it had not achieved.
+    saveEnvelope(env, { forget: signatures.map((s) => s.signature) });
   }
 
   if (json) {
