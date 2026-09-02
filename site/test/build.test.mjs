@@ -467,8 +467,15 @@ describe('the site does not invent facts', () => {
   });
 
   test('the "sample of one" caveat travels with the numbers', () => {
+    // The figure is read from the README rather than written here. These are
+    // measurements of one developer's machine and they move as it is used —
+    // hardcoding one meant an honest re-measurement broke the test, which
+    // teaches people to edit the assertion instead of reading it.
+    const readme = fs.readFileSync(path.join(SITE, '..', 'README.md'), 'utf8');
+    const rate = readme.match(/took it from \d+% to \*\*(\d+)% of actions running without a prompt/);
+    assert.ok(rate, 'the README no longer states the allow rate in the expected shape');
     const home = pages.find((p) => p.file === 'index.html').html;
-    assert.ok(home.includes('41%'), 'the home page quotes the allow rate');
+    assert.ok(home.includes(`${rate[1]}%`), `the home page does not quote the allow rate (${rate[1]}%)`);
     assert.match(home, /sample of one/, 'the caveat is missing from the home page');
   });
 
@@ -512,8 +519,14 @@ describe('claims the review found overstated', () => {
   });
 
   test('the understood-share figure is attributed to one machine', () => {
-    const at = home.indexOf('44.5');
-    assert.ok(at > 0, 'the understood share is not on the page');
+    // Same reasoning: taken from the README, not restated. What is being
+    // asserted is that the caveat travels with whatever the number currently
+    // is, not that the number is any particular value.
+    const readme = fs.readFileSync(path.join(SITE, '..', 'README.md'), 'utf8');
+    const share = readme.match(/\*\*([\d.]+)% are ones LeastGrant will say it fully/);
+    assert.ok(share, 'the README no longer states the understood share in the expected shape');
+    const at = home.indexOf(share[1]);
+    assert.ok(at > 0, `the understood share (${share[1]}%) is not on the page`);
     const nearby = home.slice(at, at + 400);
     assert.match(nearby, /one machine/, 'the figure has no caveat attached to it');
   });

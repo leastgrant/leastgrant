@@ -112,7 +112,7 @@ On the machine this was developed on, that was around eleven thousand real tool 
 projects. This is a real run, captured 2026-08-31:
 
 ```
-  ✓ 59 sessions across 20 projects   10,956 actions, about 10 days of history
+  ✓ 97 sessions across 21 projects   13,439 actions, about 14 days of history
 
   What they have been doing
     looking around                     ██████████████████ 8,344
@@ -137,7 +137,7 @@ projects. This is a real run, captured 2026-08-31:
       This sends data off the machine, so anything it can read it can also leak.
 
   Checking itself
-    ✓ of the 44 actions you turned down, LeastGrant would have waved through none.
+    ✓ of the 58 actions you turned down, LeastGrant would have waved through none.
 ```
 
 That last section is the one worth reading. The replay reports its own mistakes: any action you
@@ -172,7 +172,7 @@ mining tells LeastGrant what is normal here and nothing more.
 ```
 
 One deliberate answer, with the consequences on screen, instead of six thousand prompts. Measured on
-that same history, the starter grants took it from 5% to **41% of actions running without a prompt,
+that same history, the starter grants took it from 5% to **39% of actions running without a prompt,
 and zero regressions** against the 44 refusals on record.
 
 Those figures come from one developer's machine and one month of work, which is a sample of one —
@@ -306,15 +306,18 @@ Writing that corpus, and the hostile audit that followed it, found real bugs in 
 which is rather the point of writing it. The commits are the record; there is no count worth
 quoting here that you could check.
 
-Measured against 6,057 real Bash commands from actual agent sessions on one machine: the shell
-parser accounted for **6,054 of them, with 0 crashes and 0.03 ms average parse time.**
+Measured on 2026-09-02 against 7,900 real Bash commands from actual agent sessions on one machine:
+the shell parser accounted for **7,897 of them, with 0 crashes and 0.03 ms average parse time.**
 
-Parsing is the easy half. Of those commands, **44.5% are ones LeastGrant will say it fully
+Parsing is the easy half. Of those commands, **42.7% are ones LeastGrant will say it fully
 understands**; the rest contain inline code (`python -c`, `node -e`), a script file, a package
 runner, or a program it has no knowledge of. Those are marked not-understood and always ask, which
 is the single largest source of prompts and is the honest answer — there is no way to know what
 `python -c "$SCRIPT"` does without running it. That number is a property of one developer's
-command mix as much as of LeastGrant; yours will differ.
+command mix as much as of LeastGrant, and it moves as that machine is used — it was 44.5% of
+6,057 commands a fortnight ago, and the drop is the sample filling up with Python and Node work
+rather than the classifier getting worse. Yours will differ. Both figures come from
+`scripts/measure-unknowns.mjs`, which you can run against your own history.
 
 ## What it is not
 
