@@ -366,9 +366,72 @@ export function pruneLedger(maxAgeDays: number): number {
  */
 function writeAtomic(file: string, contents: string): void {
   ensureDir(path.dirname(file));
-  const tmp = `${file}.${process.pid}.tmp`;
+  // The pid alone is not unique enough: one process can be part-way through
+  // two writes to the same file, and a temp name that collides is a corrupt
+  // write rather than a lost one.
+  const tmp = `${file}.${process.pid}.${(tmpSeq++).toString(36)}.tmp`;
   fs.writeFileSync(tmp, contents, 'utf8');
-  fs.renameSync(tmp, file);
+  try {
+    renameOver(tmp, file);
+  } catch (err) {
+    // Do not leave the scratch file behind. Before this, a burst of concurrent
+    // envelope saves littered `envelopes/` with one `.tmp` per failure, and
+    // they were never cleaned up because nothing knew they existed.
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+}
+
+let tmpSeq = 0;
+
+/** Codes Windows raises when the destination is momentarily held open. */
+const CONTENDED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Replace a file, retrying while the destination is busy.
+ *
+ * POSIX `rename(2)` replaces the destination even if another process has it
+ * open. Windows does not: `MoveFileEx` refuses with `EPERM` or `EACCES` while
+ * any other handle is on the target, and every hook process opens the envelope
+ * to read it before saving. Measured on twenty-four concurrent PostToolUse
+ * processes: sixteen renames failed outright, and the evidence from those
+ * sixteen completed calls was silently dropped — the exception was swallowed by
+ * the hook's fail-open handler, so all anybody saw was a permission layer that
+ * learned far more slowly than the number of approvals it had been given.
+ *
+ * The contention is momentary — a `readFileSync` and nothing more — so a short
+ * bounded backoff turns it into a few milliseconds of waiting. Bounded, because
+ * the alternative to giving up is wedging a hook, and a lost envelope write is
+ * recoverable in a way a hung agent is not: refusals are journalled separately
+ * to `denials.jsonl`, which is append-only precisely so that no failed write
+ * here can lose a no.
+ */
+function renameOver(tmp: string, file: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(tmp, file);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (attempt >= 12 || !CONTENDED.has(code)) throw err;
+      sleepMs(1 + attempt); // 1..12ms, 78ms of waiting before giving up
+    }
+  }
+}
+
+/**
+ * Sleep without an event loop.
+ *
+ * Everything on this path is synchronous by design — the hook is a short-lived
+ * process that must not return before its state is durable — so the wait has to
+ * be too.
+ */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** Diagnostic log, used when the hook cannot speak to the user any other way. */
