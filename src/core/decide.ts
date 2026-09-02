@@ -64,13 +64,29 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
 
   interface Judged {
     action: Action;
+    /** Every guard that fired. Reporting. */
     hits: GuardHit[];
+    /**
+     * The guards that actually constrained this action's decision.
+     *
+     * Not the same set as `hits`, and the difference is load-bearing. A guard
+     * the human's own allow rule already answered, or one autopilot waives,
+     * fired but decided nothing. Folding `floor` from `hits` reported those as
+     * floors, and `floor` is not decoration: the Codex adapter reads it to tell
+     * "merely unfamiliar" from "a rule LeastGrant enforces itself". A standing
+     * allow rule on `cat <path:secret>` therefore made Codex *hard-deny* an
+     * unrelated unreadable script in the same command — adding a rule to remove
+     * friction created it somewhere else, in another agent.
+     */
+    floored: GuardHit[];
     fam: Familiarity;
     decision: Decision;
     reasons: Reason[];
+    /** taintConcern for THIS action, against the session as it stands. */
+    concern: string | null;
   }
 
-  const judged: Judged[] = analysis.actions.map((action) => {
+  const judged: Judged[] = analysis.actions.map((action, index) => {
     const hits = checkGuards(action, guardCtx);
     const fam = familiarity(
       ctx.envelope,
@@ -83,18 +99,40 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
       },
       th,
     );
-    const { decision, reasons } = decideOne(action, hits, fam, ctx, req);
-    return { action, hits, fam, decision, reasons };
+    const { decision, reasons, floored } = decideOne(action, hits, fam, ctx, req);
+    return {
+      action,
+      hits,
+      floored,
+      fam,
+      decision,
+      reasons,
+      // Per action, not once for the elected one. `cat ~/.ssh/id_rsa` earlier in
+      // the session then `rm -rf ./build && curl https://x` used to come back
+      // ALLOW, because the delete outranks the fetch on blast tier and wins the
+      // election, and `fs.delete` has no taint rule. The curl alone asked. So
+      // appending a delete to an exfiltration-shaped call removed the prompt.
+      concern: taintConcern(ctx.session, action.capability, action.blast),
+      index,
+    } as Judged & { index: number };
   });
 
-  // The worst action drives the verdict: deny beats ask beats allow, and within
-  // a tie, the larger blast radius wins. A command is only as safe as its most
-  // dangerous part.
+  // Election picks which action the *sentences* are about. It does not decide
+  // anything: every security-relevant field below is folded across all of them,
+  // so a fact cannot be lost by losing this sort.
+  //
+  // Deny beats ask beats allow, then the larger blast radius, and — new — then
+  // the signature, so the order is total. It was previously decided by input
+  // order among equals, which handed the choice of representative to the agent
+  // whose request is being judged: emitting the same two actions the other way
+  // round changed which one the human was shown.
   const rank = (d: Decision) => (d === 'deny' ? 2 : d === 'ask' ? 1 : 0);
   judged.sort((a, b) => {
     const r = rank(b.decision) - rank(a.decision);
     if (r !== 0) return r;
-    return blastTier(b.action.blast) - blastTier(a.action.blast);
+    const t = blastTier(b.action.blast) - blastTier(a.action.blast);
+    if (t !== 0) return t;
+    return a.action.signature < b.action.signature ? -1 : a.action.signature > b.action.signature ? 1 : 0;
   });
 
   const worst = judged[0]!;
@@ -120,7 +158,16 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
     for (const hit of other.hits) {
       if (seen.has(hit.id)) continue;
       seen.add(hit.id);
-      reasons.push({ code: hit.id, text: hit.text, weight: 'blocks' });
+      // `blocks` only if it actually blocked. A sibling's guard that the human's
+      // own rule already satisfied is reported, because they should still see
+      // that their command reads a credential — but as information, with the
+      // same wording decideOne uses, not as a reason the request was held up.
+      const waived = !other.floored.some((f) => f.id === hit.id);
+      reasons.push(
+        waived
+          ? { code: hit.id, text: `${hit.text} (allowed by your rule)`, weight: 'info' }
+          : { code: hit.id, text: hit.text, weight: 'blocks' },
+      );
     }
   }
 
@@ -134,13 +181,34 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
     });
   }
 
-  const concern = taintConcern(ctx.session, worst.action.capability, worst.action.blast);
-  if (concern && worst.decision !== 'deny') {
+  // --- the fold ------------------------------------------------------------
+  //
+  // Every field below is derived from ALL judged actions. The rule this file
+  // now keeps: a security fact may only come from a fold, never from `worst`.
+  // Three separate bugs were one violation of it — the floor, the taint, and
+  // the reasons were each read off whichever action happened to win a sort on
+  // two unrelated keys.
+
+  // Deny beats ask beats allow, over every action.
+  const folded: Decision = judged.reduce<Decision>(
+    (acc, j) => (rank(j.decision) > rank(acc) ? j.decision : acc),
+    'allow',
+  );
+
+  // Any action whose guard actually held. Waived guards are reported, not
+  // gated on — see Judged.floored.
+  const flooredGuards = [...new Set(judged.flatMap((j) => j.floored.map((h) => h.id)))];
+  const floor = flooredGuards.length > 0;
+
+  // The first concern any action raises, in the order the human will read them.
+  const concern = judged.find((j) => j.concern)?.concern ?? null;
+
+  // A taint concern raises an allow to an ask; it never lowers a deny.
+  const decision: Decision = concern && folded === 'allow' ? 'ask' : folded;
+
+  if (concern && decision !== 'deny') {
     reasons.unshift({ code: 'session.taint', text: concern, weight: 'raises' });
   }
-
-  const decision: Decision =
-    concern && worst.decision === 'allow' ? 'ask' : worst.decision;
 
   return {
     decision,
@@ -148,8 +216,8 @@ export function decide(req: Request, ctx: DecideCtx): Verdict {
     actions: analysis.actions,
     reasons,
     headline: headlineFor(decision, worst.action, reasons),
-    // Any action's guard, not just the winning one — see the note above.
-    floor: judged.some((j) => j.hits.length > 0),
+    floor,
+    flooredGuards,
     familiarity: worst.fam,
   };
 }
@@ -160,7 +228,7 @@ function decideOne(
   fam: Familiarity,
   ctx: DecideCtx,
   req: Request,
-): { decision: Decision; reasons: Reason[] } {
+): { decision: Decision; reasons: Reason[]; floored: GuardHit[] } {
   const reasons: Reason[] = [];
   const th = ctx.config.thresholds ?? DEFAULT_THRESHOLDS;
 
@@ -168,7 +236,7 @@ function decideOne(
   const integrity = hits.find((h) => h.decision === 'deny');
   if (integrity) {
     reasons.push({ code: integrity.id, text: integrity.text, weight: 'blocks' });
-    return { decision: 'deny', reasons };
+    return { decision: 'deny', reasons, floored: [integrity] };
   }
 
   // 2 & 3. Explicit rules.
@@ -179,7 +247,7 @@ function decideOne(
       text: rule.note ? `you set a rule to always block this: ${rule.note}` : 'you set a rule to always block this',
       weight: 'blocks',
     });
-    return { decision: 'deny', reasons };
+    return { decision: 'deny', reasons, floored: [] };
   }
   if (rule?.effect === 'allow') {
     reasons.push({
@@ -190,7 +258,10 @@ function decideOne(
     for (const h of hits) {
       reasons.push({ code: h.id, text: `${h.text} (allowed by your rule)`, weight: 'info' });
     }
-    return { decision: 'allow', reasons };
+    // Every guard here fired and none of them held: the human answered this
+    // question in advance, which is what an allow rule is. Reporting them as
+    // floors is the bug described on Judged.floored.
+    return { decision: 'allow', reasons, floored: [] };
   }
 
   // 4. Ask floors.
@@ -215,7 +286,7 @@ function decideOne(
       text: 'LeastGrant never auto-approves this kind of action, however often it happens',
       weight: 'info',
     });
-    return { decision: 'ask', reasons };
+    return { decision: 'ask', reasons, floored: effective };
   }
   if (hits.length && effective.length === 0) {
     reasons.push({
@@ -232,7 +303,7 @@ function decideOne(
       text: 'you are in strict mode, so only actions you have explicitly allowed run without asking',
       weight: 'raises',
     });
-    return { decision: 'ask', reasons };
+    return { decision: 'ask', reasons, floored: [] };
   }
 
   let promo = canPromote(fam, action.blast, th);
@@ -285,7 +356,7 @@ function decideOne(
       text: describeBlast(action),
       weight: 'info',
     });
-    return { decision: 'allow', reasons };
+    return { decision: 'allow', reasons, floored: [] };
   }
 
   // 6. Ask, with a reason that says what would change our mind.
@@ -322,7 +393,7 @@ function decideOne(
       weight: 'raises',
     });
   }
-  return { decision: 'ask', reasons };
+  return { decision: 'ask', reasons, floored: [] };
 }
 
 function promotionGap(

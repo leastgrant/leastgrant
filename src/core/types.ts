@@ -264,8 +264,29 @@ export interface Verdict {
   /**
    * True when the verdict came from a hard guard that learning can never
    * unlock. Surfaced so the UI can say "this will always ask".
+   *
+   * Folded across every action, and only from guards that actually held — see
+   * `flooredGuards`.
    */
   floor: boolean;
+  /**
+   * The ids of the guards that constrained this verdict, across all actions.
+   *
+   * Separate from the `guard.*` entries in `reasons`, which list every guard
+   * that *fired*, including ones the human's own allow rule already answered.
+   * Both belong in the output: a developer should still be told their command
+   * reads a credential even though they allowed it. But a consumer deciding
+   * what to *do* must not read that sentence as a constraint.
+   *
+   * The Codex adapter did exactly that. It classifies a floor by scanning
+   * reason codes for the `guard.` prefix, so a standing allow rule on
+   * `cat <path:secret>` turned `cat .env && ./script.sh` into a hard deny in
+   * bypassPermissions, while `./script.sh` alone abstained. Adding a rule to
+   * remove friction created it somewhere else, in a different agent.
+   *
+   * Gates read this. Prose reads `reasons`.
+   */
+  flooredGuards: string[];
   /** Familiarity summary used, for `leastgrant why`. */
   familiarity?: Familiarity;
 }

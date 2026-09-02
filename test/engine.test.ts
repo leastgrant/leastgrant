@@ -954,9 +954,27 @@ describe('decide precedence', () => {
     const withRule = decide(req, ctxFor({ rules: [rule({ match: sig, effect: 'allow', note: 'dev-only secrets' })] }));
     assert.equal(withRule.decision, 'allow');
     assert.ok(withRule.reasons.some((r) => r.code === 'rule.allow'));
-    // The floor is still reported, so the UI can say what was waived.
+    // The guard is still reported, so the UI can say what was waived...
     assert.ok(withRule.reasons.some((r) => r.code === 'guard.secret-read'));
-    assert.equal(withRule.floor, true);
+    // ...but it is not a floor, and this assertion used to say the opposite.
+    //
+    // `floor` is documented as "this will always ask", and this verdict is an
+    // allow. Reporting a floor on it was a contradiction that stayed harmless
+    // only while floor drove a sentence in the CLI. It stopped being harmless
+    // when adapters began branching on it: the Codex adapter reads floor to
+    // tell "merely unfamiliar" from "a rule LeastGrant enforces itself", so a
+    // standing allow rule on a credential read turned `cat .env && ./script.sh`
+    // into a hard deny under bypassPermissions while `./script.sh` alone
+    // abstained. A rule added to remove friction created it in another agent.
+    //
+    // What was waived belongs in `reasons`, which is prose. What constrained
+    // the decision belongs in `flooredGuards`, which is what gates read.
+    assert.equal(withRule.floor, false, 'a guard the rule answered did not constrain anything');
+    assert.deepEqual(withRule.flooredGuards, []);
+
+    // And the bare case is unchanged: nothing waived it, so it is a real floor.
+    assert.equal(bare.floor, true);
+    assert.deepEqual(bare.flooredGuards, ['guard.secret-read']);
   });
 
   test('an explicit allow rule does not satisfy an integrity floor', () => {
