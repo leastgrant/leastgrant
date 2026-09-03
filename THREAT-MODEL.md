@@ -219,12 +219,18 @@ execution rather than merely hiding a project file — `INJECTS_EXECUTION` in
 `src/core/classify.ts` widens its reach to `machine` anyway. See
 [Posture changes what a "floor" means](#posture-changes-what-a-floor-means).)
 
-**Anti-claim, in two numbers that measure different things.** Across 6,075 real Bash
-tool calls from this machine's Claude Code transcripts, the shell parser accounted
-for 6,072 of them, with 0 crashes and 0.04 ms average parse time. That is a statement
-about *parsing*. Only 44.5% of the same corpus comes out `understood: true` — inline
-code (`python -c`), programs with no knowledge module, script files, and interpreters
-fed from stdin are all not-understood, and all of them ask, every time.
+**Anti-claim, in two numbers that measure different things.** The shell parser
+structurally accounts for almost every real command it is given, at a fraction of a
+millisecond each. That is a statement about *parsing*. A much smaller share comes out
+`understood: true` — inline code (`python -c`), programs with no knowledge module,
+script files, and interpreters fed from stdin are all not-understood, and all of them
+ask, every time.
+
+Both figures, with their sample size and the machine they came from, are in the
+README, and they are deliberately not repeated here. This section used to carry its
+own copy — 6,075 calls, 44.5% understood — which went stale while the README moved on,
+and the stale copy then got quoted further down this same file meaning the opposite
+thing. One place for a measurement.
 
 Those two numbers are not interchangeable, and conflating them is how the figure that
 used to sit here — "98.4% of 5,452 real agent commands fully accounted for" — read as
@@ -1064,9 +1070,10 @@ weigh before trusting this:
   parse used to be on that list and is not any more: it now says so on stderr and falls
   to `strict`, which asks about everything, because reverting to the permissive default
   is a change to what the human configured and doing it silently is the worst version.
-- **44.5% of real commands are marked not-understood.** Inline code (`python -c`), script
+- **Most real commands are marked not-understood.** Inline code (`python -c`), script
   files, package runners and unknown binaries cannot be reasoned about, so they always
   ask. That is the honest answer and it is also the single largest source of prompts.
+  The measured share is in the README, and only there.
 - **Forged history can still promote harmless work.** Mining now yields observation
   only, and observation only promotes trivially-reversible project-local reads. A forged
   transcript can therefore still buy silent reads of project files — not nothing, but a

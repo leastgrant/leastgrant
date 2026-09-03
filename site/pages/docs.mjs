@@ -209,12 +209,42 @@ export function docPage(facts, doc) {
     headings,
     html: body,
     sourceNote:
+      // "at v0.5.0" beside a link to `main` claimed a pin the link does not
+      // have: the origin rebuilds from main, so the page can be ahead of the
+      // tag and the link shows whatever main holds now. Both halves say `main`.
       `Rendered from <a href="${attr(href)}" rel="noopener noreferrer">${esc(doc.source)}</a> ` +
-      `in the repository at v${esc(facts.version)}. This page is a view of that file, not a copy of it.`,
+      `on main. This page is a view of that file, not a copy of it.`,
   });
 }
 
 // --- generated pages ---------------------------------------------------------
+
+/**
+ * The command names, read out of the captured `--help`.
+ *
+ * The Commands block indents each entry by four spaces and puts the name first;
+ * the sections after it (Getting started, Options) are excluded by stopping at
+ * the first blank line, so an example invocation is never mistaken for a
+ * command.
+ */
+function commandNames(help) {
+  const block = String(help?.help ?? '').split(/^\s*Commands\s*$/m)[1] ?? '';
+  const names = [];
+  let started = false;
+  for (const line of block.split('\n')) {
+    // The split leaves the newline that followed the heading, so blank lines
+    // only end the block once entries have actually begun.
+    if (!line.trim()) {
+      if (started) break;
+      continue;
+    }
+    started = true;
+    const m = line.match(/^\s{2,}([a-z][a-z-]+)\b/);
+    if (m) names.push(m[1]);
+  }
+  if (names.length < 5) throw new Error('could not read the command list out of --help');
+  return names;
+}
 
 /** The CLI reference: the real `--help`, plus the commands table from the README. */
 export function cliPage(facts, help) {
@@ -279,9 +309,11 @@ npm uninstall -g leastgrant     # remove the package</code></pre></figure>
   return page({
     path: '/docs/cli/',
     title: 'CLI reference',
-    description:
-      'Every LeastGrant command, generated from the real --help output: check, init, status, ' +
-      'why, trail, simulate, allow, deny, doctor, install.',
+    // Listed from the captured --help rather than typed. The typed version said
+    // "Every LeastGrant command" and then named ten of the fourteen, omitting
+    // benchmark, forget, rules and uninstall — so the one line a search result
+    // shows both overclaimed and undersold.
+    description: `Every LeastGrant command, generated from the real --help output: ${commandNames(help).join(', ')}.`,
     body,
   });
 }

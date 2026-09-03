@@ -95,9 +95,12 @@ If you can think of a shape that is not in there, add it. You do not need to fix
 pull request — a failing case with a name is a contribution on its own, and it tells us
 something we did not know.
 
-Match the existing style: one entry in the `BYPASSES` array with a short `name` and the literal
-`command`, and let the shared assertion do the work. Assertions there use `assert.notEqual(...,
-'allow')` rather than asserting a specific decision, because the claim being tested is "this is
+The cases live in [`corpus/bypasses.json`](corpus/bypasses.json), not in the test. Add an object to
+`cases` with an `id` of the form `class/short-name`, the `class` it belongs to (one of the keys in
+`classes`), the literal `command`, an `expect` of `not-allow`, and a one-line `note` saying what the
+shape is. `test/bypass.test.ts` iterates the file, so a case needs no test code of its own.
+
+`expect: "not-allow"` rather than a specific verdict, because the claim being tested is "this is
 never waved through", not "this produces exactly this verdict".
 
 ### 3. An adapter for another agent
@@ -115,15 +118,16 @@ adapter's header comment, the way `hook.ts` does:
   non-blocking error and Claude Code **proceeds with the tool call**. Exit 2 is the one code that
   blocks. LeastGrant fails open: `runHook` catches everything and `emit()` always exits 0. That
   is stated out loud rather than papered over.
-- Whether a hook `deny` is absolute, and by which mechanism. Be careful here — this is the
-  claim most easily overstated. What `hook.ts` documents is that **exit 2** blocks
-  unconditionally, even over an allow rule. LeastGrant does not use exit 2: `emit()` writes
-  `hookSpecificOutput.permissionDecision` and exits 0. So "LeastGrant's deny is absolute" rests
-  on the JSON path having the same precedence as exit 2, which nothing in this repository
-  establishes. The note printed by `leastgrant install` ("A LeastGrant block is final, even in
-  bypass mode", in `src/cli/commands/install.ts`) asserts more than the code demonstrates. If
-  you are writing a new adapter, find out which mechanism your agent honours and write down
-  which one you used.
+- Whether a hook `deny` is absolute, and by which mechanism. This is the claim most easily
+  overstated, and it took live probes on all five shipped agents to earn it: every one of them
+  now records `verdicts.deny` as `honoured` with `evidence: probe`, Claude Code in its most
+  permissive mode and Codex under `--dangerously-bypass-approvals-and-sandbox`. Read the notes in
+  [`compatibility/`](compatibility/) rather than assuming it transfers — the mechanism differs.
+  Claude Code documents **exit 2** as the unconditional block, and LeastGrant does not use exit 2:
+  `emit()` writes `hookSpecificOutput.permissionDecision` and exits 0. That the JSON path has the
+  same reach was established by running it, not by reading the contract. If you are writing a new
+  adapter, find out which mechanism your agent honours, probe it, and write down which one you
+  used and what you saw.
 - What a hook `allow` is worth. In Claude Code it is not absolute: the user's own deny and ask
   rules still override it. LeastGrant aims to be a reliable veto and a best-effort grant, and
   the product is built around that asymmetry.
