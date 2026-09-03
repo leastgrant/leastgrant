@@ -259,7 +259,8 @@ const MARKER = /(^|[\\/"'\s])(bin[\\/])?leastgrant\.js["']?\s+hook(\s|$)/i;
  * The 8.3 spelling of that same entry point: `...\bin\LEASTG~1.JS hook`.
  *
  * `scriptToken` writes this whenever the install path contains a space, which
- * on Windows is the ordinary case — `C:\Users\First Last\...`. Recognition was
+ * on Windows is the ordinary case, since any account name with a space in it
+ * puts one in every path under that profile. Recognition was
  * matching only the long spelling, so on exactly those machines the installer
  * could not see its own handler: a second install duplicated every entry, and
  * uninstall reported success while removing nothing. No CI runner has a space
