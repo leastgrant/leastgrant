@@ -26,6 +26,20 @@ const READERS = [
 /** Search tools. Same risk as readers, but worth their own capability label. */
 const SEARCHERS = ['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ugrep'];
 
+/**
+ * Does this argument look like a path rather than a command name?
+ *
+ * Used only to disambiguate the commands that mean different things on cmd and
+ * on a POSIX shell. Deliberately generous — a separator, a drive letter, a
+ * leading dot or a dotted suffix all count — because being wrong in this
+ * direction costs one prompt, and being wrong in the other costs a credential
+ * read nobody was asked about.
+ */
+function looksLikePathArg(a: string): boolean {
+  if (!a || a.startsWith('-')) return false;
+  return /[\/]/.test(a) || /^[A-Za-z]:/.test(a) || a.startsWith('.') || /\.[A-Za-z0-9_]{1,8}$/.test(a);
+}
+
 /** Produce output, touch nothing. */
 const PRINTERS = [
   'echo', 'printf', 'yes', 'seq', 'date', 'true', 'false', 'test', '[', 'expr',
@@ -96,6 +110,23 @@ export const coreutils: ProgramKnowledge = {
       return { capability: 'meta', note: 'sets a shell variable', pathArgs: 'none' };
     }
     if (PRINTERS.includes(name)) {
+      // `type` and `more` are two commands wearing one name each.
+      //
+      // POSIX `type ls` reports how a name would be resolved and touches
+      // nothing. cmd's `type file` IS `cat`. Classifying by the POSIX meaning
+      // made a Windows credential path an inspect with no path arguments, so no
+      // target was produced and every path-keyed floor stayed silent — and the
+      // residue signed as the same `type <text>` as ordinary work, which is
+      // promotable. Measured: twelve ordinary reads spelled that way promoted
+      // the signature, and the credential read that followed came back ALLOW.
+      //
+      // The two meanings are told apart by the argument, which is the only
+      // honest signal available: POSIX `type` takes a command name, cmd's takes
+      // a path. An argument that looks like a path gets the reader treatment; a
+      // bare name keeps the inspect one, so `type node` is still free.
+      if ((name === 'type' || name === 'more') && argv.slice(1).some(looksLikePathArg)) {
+        return readJudgement(argv, ctx, false);
+      }
       // `printenv` with no args dumps the environment, which may hold secrets,
       // but it does not read a credential *file*; the risk is in what happens
       // to the output, which the pipeline context covers.

@@ -515,17 +515,53 @@ export function tokenize(src: string, opts: TokenizeOptions = {}): TokenizeResul
 
     const quote: QuoteKind =
       quotes.size === 0 ? 'none' : quotes.size === 1 ? [...quotes][0]! : 'mixed';
+    const raw = src.slice(start, i);
 
     return {
       type: 'word',
-      text,
-      raw: src.slice(start, i),
+      // A native Windows path is not an escape sequence, whatever POSIX says.
+      text: windowsPathLiteral(raw, text, quote) ?? text,
+      raw,
       quote,
       expansions,
       start,
       end: i,
     };
   }
+
+/**
+ * The raw spelling of a token that is a Windows path, or null if it is not one.
+ *
+ * This parser reads POSIX rules, and on Windows the agents run cmd or
+ * PowerShell, where a backslash is an ordinary path character. So
+ * `type C:\Users\me\.ssh\id_rsa` de-escaped to `C:Usersme.sshid_rsa`,
+ * which `looksLikePath` then rejected — no separator — so the call produced NO
+ * path target at all. Every path-keyed floor is keyed on targets, so
+ * `guard.secret-read`, `guard.write-outside`, `guard.agent-config` and
+ * `guard.persistence` went silent together, and the residue signed as the same
+ * `type <text>` as any ordinary read. Measured: twelve ordinary in-project
+ * reads spelled that way promoted the signature, and the credential read that
+ * followed came back ALLOW with no floors.
+ *
+ * This is the failure `UNPLACEABLE` exists to prevent, arriving by a door it
+ * does not cover: the path never becomes a path in the first place.
+ *
+ * The rule is deliberately narrow. Only an unquoted token whose raw form starts
+ * with a drive letter and a separator, or with a UNC prefix — spellings that
+ * are Windows paths and essentially never anything else. A quoted token is
+ * already correct, because quoting suppresses the escapes. Everything else
+ * keeps the POSIX reading, so this cannot change how an ordinary shell script
+ * is understood.
+ */
+function windowsPathLiteral(raw: string, text: string, quote: QuoteKind): string | null {
+  if (quote !== 'none' || raw === text) return null;
+  // A drive letter and a separator (`C:\` or `C:/`), or a UNC prefix — two
+  // literal backslashes followed by a host character. Two, not one: a single
+  // leading backslash is an ordinary POSIX escape, and matching it here turned
+  // `echo \$HOME` into a literal `\$HOME`.
+  if (!/^([A-Za-z]:[\\/]|\\\\[^\\/])/.test(raw)) return null;
+  return raw;
+}
 
   function findAnsiCEnd(from: number): number {
     let j = from;

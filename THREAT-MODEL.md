@@ -1119,6 +1119,30 @@ weigh before trusting this:
 - **The calibration numbers come from one machine.** 59 sessions, 20 projects, one
   developer's command mix. `scripts/verify-claims.mjs` exists so you can replace them
   with yours rather than believing these.
+- **The shell parser reads POSIX escapes, and on Windows the agents run a Windows
+  shell.** A native credential path written with backslashes had every one of them eaten
+  as an escape, so the token de-escaped to something that is not a path at all — no
+  separator, no target. Every path-keyed floor is keyed on targets, so
+  `guard.secret-read`, `guard.write-outside`, `guard.agent-config` and
+  `guard.persistence` went silent together. This is the failure `UNPLACEABLE` exists to
+  prevent, arriving by a door it does not cover: the path never becomes a path. It did
+  not stop at a missing floor — the residue signed as the same `type <text>` as any
+  ordinary read, so twelve approved in-project reads promoted the signature and the
+  credential read that followed came back ALLOW with no floors. Fixed: an unquoted token
+  whose raw form begins with a drive letter and a separator, or with a UNC prefix, keeps
+  its raw spelling, and nothing else changes. `type` and `more` are also two commands
+  wearing one name each — POSIX `type` reports how a name resolves, cmd's `type` is
+  `cat` — and are now read as readers when handed something path-shaped, while `type
+  node` stays free. This affected every agent LeastGrant supports on Windows, not one of
+  them.
+- **A credential DIRECTORY is recognised by where it sits, not by its name.** A file
+  called `id_rsa` or `credentials` floors wherever it is, but a directory called `.ssh`
+  only reads as a credential tree under the real home directory. So a recursive grep of
+  someone else's `.ssh` reaches no floor, while reading any file inside it does. Left as
+  it is deliberately: widening the rule to any directory named `.ssh` or `.aws` would
+  floor a repository's own test fixtures, and that trade is worth making on purpose
+  rather than as a side effect. Pinned in `test/windows-paths.test.ts` with the exclusion
+  named, so the day it changes the test says so.
 - **A symlink swapped after the check still wins.** Resolution reads the filesystem
   at decision time. Nothing stops a link being repointed between the verdict and the
   command running — the time-of-check-to-time-of-use race that §3 declines to defend
