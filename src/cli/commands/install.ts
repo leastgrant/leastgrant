@@ -255,9 +255,46 @@ function powershellQuote(s: string): string {
  */
 const MARKER = /(^|[\\/"'\s])(bin[\\/])?leastgrant\.js["']?\s+hook(\s|$)/i;
 
+/**
+ * The 8.3 spelling of that same entry point: `...\bin\LEASTG~1.JS hook`.
+ *
+ * `scriptToken` writes this whenever the install path contains a space, which
+ * on Windows is the ordinary case — `C:\Users\First Last\...`. Recognition was
+ * matching only the long spelling, so on exactly those machines the installer
+ * could not see its own handler: a second install duplicated every entry, and
+ * uninstall reported success while removing nothing. No CI runner has a space
+ * in its checkout path, so every runner agreed the code was fine.
+ *
+ * Shape is not identity. A `leastgrant-notify.js` sitting in the same directory
+ * can be `LEASTG~2.JS`, and the whole reason `MARKER` is narrow is that we must
+ * not delete a hook somebody else installed. So a match here is grounds to ask
+ * the filesystem, never an answer on its own.
+ */
+const SHORT_MARKER = /(^|[\\/])LEASTG~\d+\.JS$/i;
+
 /** Is this a hook entry LeastGrant installed? */
 function isOurs(command: string | undefined): boolean {
-  return MARKER.test(String(command ?? ''));
+  const cmd = String(command ?? '');
+  if (MARKER.test(cmd)) return true;
+
+  // The short form is only ever written when it needs no quoting, so splitting
+  // on whitespace recovers exactly the tokens that were written.
+  const tokens = cmd.split(/\s+/);
+  const i = tokens.findIndex((t) => SHORT_MARKER.test(t));
+  if (i < 0 || tokens[i + 1] !== 'hook') return false;
+
+  try {
+    // `realpathSync.native` goes through the OS and gives back the long name;
+    // Node's own `realpathSync` does not expand 8.3 at all.
+    return path.basename(fs.realpathSync.native(tokens[i]!)).toLowerCase() === 'leastgrant.js';
+  } catch {
+    // The target is gone, so nothing can confirm what it was. Claiming it is
+    // the safer error: an entry pointing at a file that no longer exists is
+    // already broken for whoever owns it, and if it is ours, leaving it behind
+    // is not merely untidy — a handler that cannot start blocks every tool call
+    // on the runtimes that fail closed. Reinstalling must be able to repair it.
+    return true;
+  }
 }
 
 export async function installCommand(argv: Argv): Promise<number> {

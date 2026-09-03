@@ -25,6 +25,7 @@
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Config, Request } from '../../core/types.js';
 import { decide } from '../../core/decide.js';
 import { analyze } from '../../core/classify.js';
@@ -255,7 +256,12 @@ function environment() {
 function packageVersion(): string {
   // Walk up for package.json rather than guessing a depth: this file runs from
   // dist/cli/commands/ after a build and from src/ under a loader.
-  let dir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  // `fileURLToPath`, not `new URL(...).pathname`: a pathname is percent-encoded,
+  // so a directory called `NGOC ANH` arrives as `NGOC%20ANH`, no package.json is
+  // ever found, and the benchmark files itself under version `unknown`. The
+  // hand-rolled drive-letter strip this replaced was approximating the same
+  // conversion, minus the decoding.
+  let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 8; i++) {
     const p = path.join(dir, 'package.json');
     try {

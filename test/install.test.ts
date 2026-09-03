@@ -67,7 +67,17 @@ function commands(file: string): string[] {
   return found;
 }
 
-const ours = (cmds: string[]) => cmds.filter((c) => /leastgrant\.js["']?\s+hook/.test(c));
+/**
+ * Ours, in either spelling.
+ *
+ * From a checkout whose path contains a space the installer writes the Windows
+ * 8.3 short form — `LEASTG~1.JS` — to keep the command quote-free. Matching only
+ * the long name made this whole file fail on any developer machine under
+ * `C:\Users\First Last\`, while passing on every CI runner. What that spelling
+ * means for the product is covered in `spaced-install-path.test.ts`; here it
+ * only has to be recognised.
+ */
+const ours = (cmds: string[]) => cmds.filter((c) => /(leastgrant\.js|LEASTG~\d+\.JS)["']?\s+hook/i.test(c));
 
 // ---------------------------------------------------------------------------
 
@@ -243,7 +253,7 @@ describe('install: agent attribution', () => {
   test('each adapter is told which agent it is serving', () => {
     const home = sandbox();
     const expected: Record<string, RegExp> = {
-      'claude-code': /leastgrant\.js["']?\s+hook\s*$/,
+      'claude-code': /(leastgrant\.js|LEASTG~\d+\.JS)["']?\s+hook\s*$/i,
       cursor: /--agent cursor$/,
       copilot: /--agent copilot$/,
       codex: /--agent codex$/,
