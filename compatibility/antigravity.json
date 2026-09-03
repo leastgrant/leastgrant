@@ -137,7 +137,9 @@
     "Subagent tools are not verified. invoke_subagent, define_subagent and manage_subagents exist in the runtime, but no subagent call was made during the live run, so LeastGrant has not been observed gating one.",
     "LeastGrant does not model the PreInvocation, PostInvocation, Stop or SessionStart events, and does not use the overwrite field that lets a hook rewrite a tool call’s arguments.",
     "Verified on Windows only, through the Desktop Hub. The Unix launch form (sh -c) is not present in this build — GOOS is a compile-time constant — and the IDE surface was not exercised.",
-    "Network and web tools are unverified. The model answered a search request from its own knowledge rather than calling a tool, so search_web and read_url_content have never been observed reaching the hook."
+    "Network and web tools are unverified. The model answered a search request from its own knowledge rather than calling a tool, so search_web and read_url_content have never been observed reaching the hook.",
+    "A workspace on a disconnected drive stalls every tool call. A single blocking stat against an absent Windows device costs about 21 seconds and Node cannot bound a synchronous one, so the hook exceeds its timeout and the host blocks the call. Safe direction, unusable agent — and Antigravity itself would be no better off on that drive.",
+    "The shell parser reads a command line with POSIX rules, and Antigravity runs a Windows shell. An unquoted native path — a Windows credential path written with backslashes — has its backslashes eaten as escapes, so no path target is produced and every path-keyed floor goes quiet together. Quoting it, or spelling it with forward slashes, floors correctly. This affects every agent LeastGrant supports on Windows, not just this one."
   ],
   "verification": {
     "live": {

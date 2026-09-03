@@ -23,19 +23,37 @@
  *
  * THREE THINGS HERE ARE THE OPPOSITE OF EVERY OTHER ADAPTER
  *
- * 1. **Silence is a DENY, not an abstain.** `applyPreToolHooks` tests
- *    `len(result.Decision) == 0` and falls back to the legacy `allow_tool`
- *    bool, whose zero value is false, which it rewrites to the literal "deny".
- *    So `{}`, `{"reason":"x"}`, or any JSON that parses without a `decision`
- *    blocks the call. Every other adapter in this repo can stand aside by
- *    printing nothing; here that wedges the agent. This file therefore always
- *    emits an explicit decision, on every path, including the error path.
+ * 1. **An abstain is an ALLOW, and JSON without a decision is a DENY.** These
+ *    are not the same thing, and the difference was measured live:
  *
- * 2. **A non-zero exit throws the output away.** `executeCommandModeHook`
- *    zeroes the output slice before returning the error, so a hook that prints
- *    a perfect deny and then exits 1 is treated as a failed hook — and a failed
- *    hook fails OPEN. Printing the right answer is not enough; the process has
- *    to succeed. This file exits 0 on every path.
+ *      empty stdout, exit 0        -> the call RUNS
+ *      `{}` or `{"reason":"x"}`    -> the call is BLOCKED
+ *      unparseable stdout          -> BLOCKED
+ *      an unrecognised decision    -> BLOCKED
+ *
+ *    The block comes from `applyPreToolHooks` falling back to the legacy
+ *    `allow_tool` bool, whose zero value is false, which it rewrites to "deny".
+ *    The allow comes from the runtime trimming the output and treating an empty
+ *    result as "no hook result" at all.
+ *
+ *    So on every other agent LeastGrant can stand aside by printing nothing;
+ *    here that is permission to proceed. This file emits an explicit decision on
+ *    every path, and so do the two catch blocks in the Claude Code entry point,
+ *    which answer `force_ask` for this agent alone when they cannot produce a
+ *    real verdict.
+ *
+ * 2. **A non-zero exit throws the output away — and blocks.** The output half
+ *    is as read from the binary: `executeCommandModeHook` zeroes the slice
+ *    before returning the error, so printing a perfect deny and then exiting 1
+ *    is treated as a failed hook. The consequence was recorded as fail-OPEN from
+ *    a static read of `applyPreToolHooks` logging and continuing. Live, it fails
+ *    CLOSED: the call is blocked and the model is told the handler failed by
+ *    name. The static read describes iteration over the remaining hooks; the
+ *    caller aborts. Timeouts behave the same way.
+ *
+ *    This file still exits 0 on every path. Not because a non-zero exit is
+ *    unsafe — it is now known to be the safe direction — but because it discards
+ *    our verdict, and an `allow` we meant to give would become a block.
  *
  * 3. **Deny and ask do not have the same reach.** `deny` is enforced in the
  *    converter, before the permission manager is involved, so it applies to any
@@ -237,6 +255,74 @@ const TOOL_MAP: Record<string, Mapping> = {
 };
 
 /**
+ * Every argument name the engine reads, gathered from the mappings themselves.
+ *
+ * A key with one of these names may appear in a translated call ONLY because a
+ * mapping put it there. Anything else carrying that name is dropped.
+ *
+ * The hole this closes: `translateArgs` wrote renamed keys and pass-through
+ * keys into one object with no collision check, and the model chooses the key
+ * order. So `{"CommandLine":"cat ~/.ssh/id_rsa","command":"ls"}` translated to
+ * `{command:"ls"}` — the engine judged `ls`, and the host, which ignores fields
+ * it does not know, ran the credential read. Measured: an honest control gave
+ * `force_ask`, the decoy gave a plain cacheable `ask`, and eight observations
+ * later it gave `allow`. The same one-key trick worked on every mapped tool,
+ * including an edit to `.agents/hooks.json` — LeastGrant approving the file
+ * that installs an `auto_approve` handler over the top of it.
+ */
+const ENGINE_KEYS = new Set<string>([
+  ...Object.values(TOOL_MAP).flatMap((m) => Object.values(m.args)),
+  ...Object.values(TOOL_MAP).flatMap((m) => Object.keys(m.add ?? {})),
+  // Read by the engine for tools this adapter does not currently map. Listed so
+  // that adding a mapping later cannot quietly open the same door.
+  'old_string',
+  'new_string',
+  'edits',
+  'notebook_path',
+  'prompt',
+  'timeout',
+]);
+
+/**
+ * The source keys a mapping cannot do without.
+ *
+ * If a mapped tool arrives with none of them, the engine is handed a tool with
+ * no arguments — and `Bash` with no `command` is not a no-op, it is a shell
+ * call nobody could read. The engine classified that as understood, blast-free
+ * and promotable, so every unreadable `run_command` collapsed onto one
+ * `(no command)` signature that reached `allow` after eight sightings. Since Go
+ * unmarshals JSON field names case-insensitively, `{"commandLine": "..."}`
+ * missed our exact-match lookup and still ran host-side.
+ */
+const REQUIRED: Record<string, string[]> = {
+  Bash: ['command'],
+  Write: ['file_path'],
+  Edit: ['file_path'],
+  Read: ['file_path'],
+  LS: ['path'],
+  Grep: ['pattern'],
+  Glob: ['pattern'],
+  WebFetch: ['url'],
+};
+
+/** Fold a tool or argument name for lookup: trimmed, lowercased, dashes as underscores. */
+const fold = (s: string): string => s.trim().toLowerCase().replace(/-/g, '_');
+
+/**
+ * The mapping for a tool name, tolerant of the spellings the engine's own
+ * normaliser already accepts.
+ *
+ * `normalizeTool` in core maps `Run_Command`, `runCommand` and `run_command `
+ * onto the shell family, so those reached the engine as a shell tool while this
+ * exact-match table missed them and left `CommandLine` untranslated — a shell
+ * call with no command, which is the promotable identity above. Folding here
+ * keeps the two in step. Homoglyph spellings still miss, and should: they are
+ * not the same name.
+ */
+const FOLDED_TOOLS = new Map(Object.entries(TOOL_MAP).map(([k, v]) => [fold(k), v] as const));
+const mappingFor = (name: string): Mapping | undefined => TOOL_MAP[name] ?? FOLDED_TOOLS.get(fold(name));
+
+/**
  * MCP arrives as one tool carrying the real one in its arguments.
  *
  * Antigravity does not expose `mcp__server__tool` the way Claude Code does. It
@@ -265,7 +351,7 @@ const mcpPart = (v: unknown): string =>
   typeof v === 'string' ? v.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') : '';
 
 export function toolNameOf(name: string, args: Record<string, unknown> = {}): string {
-  if (name === MCP_TOOL) {
+  if (fold(name) === MCP_TOOL) {
     const server = mcpPart(args['ServerName']);
     const tool = mcpPart(args['ToolName']);
     // Only when BOTH are present. A half-named MCP call is exactly the kind of
@@ -274,12 +360,12 @@ export function toolNameOf(name: string, args: Record<string, unknown> = {}): st
     if (server && tool) return `mcp__${server}__${tool}`;
     return name;
   }
-  return TOOL_MAP[name]?.tool ?? name;
+  return mappingFor(name)?.tool ?? name;
 }
 
 /** Rename the argument keys a mapped tool uses; pass everything else through. */
 export function translateArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
-  if (name === MCP_TOOL) {
+  if (fold(name) === MCP_TOOL) {
     // Unwrap only when the identity was actually rebuilt. A half-named call
     // keeps its whole payload: it is going to be judged as the opaque
     // `call_mcp_tool`, and handing that an empty argument object would make an
@@ -304,11 +390,54 @@ export function translateArgs(name: string, args: Record<string, unknown>): Reco
     }
     return args;
   }
-  const m = TOOL_MAP[name];
-  if (!m) return args;
+  const m = mappingFor(name);
+  // An unmapped tool keeps its own name, so the engine judges it as an opaque
+  // call — but its arguments must not be able to masquerade as engine ones.
+  if (!m) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(args)) if (!ENGINE_KEYS.has(k)) out[k] = v;
+    return out;
+  }
+
+  // Source keys, matched exactly first and case-insensitively second — the same
+  // order Go's json.Unmarshal uses host-side, so we read what the host reads.
+  const folded = new Map(Object.entries(args).map(([k, v]) => [fold(k), [k, v]] as const));
   const out: Record<string, unknown> = { ...(m.add ?? {}) };
-  for (const [k, v] of Object.entries(args)) out[m.args[k] ?? k] = v;
+  const consumed = new Set<string>();
+  for (const [src, target] of Object.entries(m.args)) {
+    const hit = src in args ? ([src, args[src]] as const) : folded.get(fold(src));
+    if (!hit) continue;
+    out[target] = hit[1];
+    consumed.add(hit[0]);
+  }
+
+  // Everything else passes through under its own name — unless that name is one
+  // the engine reads, in which case it is dropped. A key the engine reads may
+  // only be present because the mapping above put it there.
+  for (const [k, v] of Object.entries(args)) {
+    if (consumed.has(k)) continue;
+    if (ENGINE_KEYS.has(k)) continue;
+    out[k] = v;
+  }
   return out;
+}
+
+/**
+ * Did the translation lose the thing that makes this call readable?
+ *
+ * Returned separately rather than folded into `translateArgs` so the caller can
+ * answer `force_ask` instead of handing the engine a shell call with no command
+ * and letting it conclude that nothing happens.
+ */
+export function unreadable(name: string, translated: Record<string, unknown>): boolean {
+  const m = mappingFor(name);
+  if (!m) return false;
+  const need = REQUIRED[m.tool];
+  if (!need) return false;
+  return !need.some((k) => {
+    const v = translated[k];
+    return typeof v === 'string' ? v.length > 0 : v !== undefined && v !== null;
+  });
 }
 
 /** What this adapter will print. */
@@ -324,10 +453,28 @@ export type AntigravityVerdict = 'allow' | 'ask' | 'force_ask' | 'deny';
  * decision LeastGrant has no business overriding when its own rules do not
  * require it.
  */
+/**
+ * Reason codes that must reach a person even though no guard floored them.
+ *
+ * `floor` alone was the test, and it let through the exact sequence this
+ * adapter's own header lists as the thing `force_ask` is for. Measured: a
+ * credential read floored, and then the outbound call that followed it in the
+ * same session — the taint concern, "already read a credential file, and this
+ * call sends data off the machine" — came back as a plain, cacheable `ask`,
+ * while an *unrecognised* tool got the unsuppressible one. Exactly backwards:
+ * the better LeastGrant understood the attack, the weaker its answer.
+ *
+ * `session.taint` is the exfiltration shape. `gap.blast` is the case the engine
+ * describes as more than it will ever approve on its own, which is by
+ * definition not something a cached "Always allow" should settle.
+ */
+const NEVER_CACHEABLE = new Set(['session.taint', 'gap.blast']);
+
 export function resolve(outcome: PreOutcome): { verdict: AntigravityVerdict; reason: string } {
   if (outcome.decision === 'deny') return { verdict: 'deny', reason: outcome.headline };
   if (outcome.decision === 'allow') return { verdict: 'allow', reason: '' };
-  return outcome.floor
+  const insist = outcome.floor || (outcome.reasons ?? []).some((r) => NEVER_CACHEABLE.has(r));
+  return insist
     ? { verdict: 'force_ask', reason: outcome.headline }
     : { verdict: 'ask', reason: outcome.headline };
 }
@@ -339,11 +486,58 @@ function render(verdict: AntigravityVerdict, reason: string): string {
   return JSON.stringify(out);
 }
 
+/**
+ * Which of the host's workspace paths may serve as a containment boundary.
+ *
+ * Taken verbatim, they could not. Two ways that went wrong, both measured:
+ *
+ *   A drive or filesystem root — `C:\`, `/`, `C:\Users` — makes everything on
+ *   the machine in-project, so `guard.write-outside` never fires and a write to
+ *   `C:\Users\Public` signs as the same ordinary `Write(<path>)` as editing a
+ *   source file. Approvals of project edits then pay for writes anywhere. Not
+ *   model-controlled, but "open a folder at C:\\" is a thing people do.
+ *
+ * Judged from the string alone — nothing here touches the filesystem.
+ *
+ * An earlier version also dropped roots that do not exist, which sounded
+ * thorough and bought nothing: a directory that is not there cannot contain
+ * anything, so it is already no weaker as a boundary. What it did buy was a
+ * blocking stat, and against an absent Windows device that costs ~21 SECONDS
+ * with no way to bound a synchronous call. It also quietly changed the verdict
+ * for any workspace path that happens not to exist yet.
+ *
+ * The dead-drive stall is therefore NOT fixed here, and is recorded as a
+ * limitation rather than described away: a workspace on a disconnected drive
+ * makes every tool call wait on the device and then be blocked by the host
+ * timeout. Safe direction, unusable agent, and the same would be true of
+ * Antigravity itself.
+ *
+ * Dropping a root is always the safe direction: fewer roots means more paths
+ * count as outside the project, never fewer.
+ */
+export function usableRoots(paths: unknown): string[] {
+  if (!Array.isArray(paths)) return [];
+  const out: string[] = [];
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p.trim()) continue;
+    const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
+    // A drive root normalises to `c:` and a POSIX root to the empty string.
+    if (norm === '' || /^[a-z]:$/i.test(norm)) continue;
+    // One level below a POSIX root is still too wide to be a project: `/home`,
+    // `/Users`, `/etc`. A single segment under a Windows drive — `C:/Users` —
+    // is the same case and is caught by the segment count below.
+    const segments = norm.replace(/^[a-z]:/i, '').split('/').filter(Boolean);
+    if (segments.length < 2 && !/^[a-z]:/i.test(norm)) continue;
+    if (/^[a-z]:/i.test(norm) && segments.length < 1) continue;
+    if (/^[a-z]:\/(users|windows|program files|programdata)$/i.test(norm)) continue;
+    out.push(p);
+  }
+  return out;
+}
+
 export function runAntigravityHook(raw: unknown): void {
   const input = (raw ?? {}) as AntigravityInput;
-  const roots = Array.isArray(input.workspacePaths)
-    ? input.workspacePaths.filter((p): p is string => typeof p === 'string')
-    : [];
+  const roots = usableRoots(input.workspacePaths);
   const cwd = roots[0] ?? process.cwd();
   const sessionId = input.conversationId || 'antigravity';
 
@@ -380,6 +574,17 @@ export function runAntigravityHook(raw: unknown): void {
       : {};
   const tool = toolNameOf(call.name, rawArgs);
   const args = translateArgs(call.name, rawArgs);
+
+  // A mapped tool whose defining argument did not survive translation is a call
+  // LeastGrant cannot read. Saying so is the whole point: handing the engine
+  // `Bash` with no `command` produced an understood, blast-free, promotable
+  // no-op, and every unreadable shell call shared that one identity.
+  if (unreadable(call.name, args)) {
+    process.stdout.write(
+      render('force_ask', `this ${call.name} call did not carry an argument LeastGrant could read`),
+    );
+    return;
+  }
 
   // `run_command` carries its own working directory, which decides where every
   // relative path in the command lands. Dropping it judged a write outside the

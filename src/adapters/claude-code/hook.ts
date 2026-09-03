@@ -115,8 +115,29 @@ export function evidenceFor(decision: string, attended: boolean): 'confirmed' | 
  * Deliberately not a dynamic import of `looksLikeAntigravity`: this runs on the
  * error path, where a second module load is one more thing that can fail.
  */
+/**
+ * The value of `--event`, read here rather than imported.
+ *
+ * The antigravity module owns the canonical copy, but this runs on the error
+ * path where a module load is one more thing that can fail — and the two are
+ * pinned together by a test.
+ */
+function eventFlag(argv: string[] = process.argv): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === '--event') return argv[i + 1]?.toLowerCase();
+    if (arg.startsWith('--event=')) return arg.slice('--event='.length).toLowerCase();
+  }
+  return undefined;
+}
+
 function answeringAntigravity(input: unknown): boolean {
   if (agentFlag() === 'antigravity') return true;
+  // `--event` is written by the same installer line as `--agent antigravity`
+  // and no other adapter uses it, so it identifies the caller even when there
+  // is no payload left to look at. That is the case the shape test cannot
+  // reach: a truncated or unparseable stdin on an install that lost `--agent`.
+  if (eventFlag()) return true;
   if (!input || typeof input !== 'object') return false;
   const o = input as Record<string, unknown>;
   if (o['tool_name'] !== undefined || o['tool_input'] !== undefined) return false;
@@ -142,7 +163,7 @@ export async function runHook(): Promise<void> {
     // rather than `ask`, because a cached grant must not be able to satisfy a
     // call nobody could parse, and rather than `deny` because a malformed
     // payload is our ignorance, not evidence of an attack.
-    if (agentFlag() === 'antigravity') {
+    if (answeringAntigravity(undefined)) {
       process.stdout.write(
         JSON.stringify({
           decision: 'force_ask',
@@ -228,6 +249,18 @@ export async function runHook(): Promise<void> {
           process.exit(0);
         }
         if (input.hook_event_name) logLine(`unknown hook event: ${String(input.hook_event_name)}`);
+        // Same asymmetry as the two catch blocks: falling out of this switch is
+        // an abstain, and on Antigravity an abstain is an allow. A payload that
+        // parses but routes nowhere — `[]`, a bare object, a shape from a
+        // version we do not know — must still be answered there.
+        if (answeringAntigravity(input)) {
+          process.stdout.write(
+            JSON.stringify({
+              decision: 'force_ask',
+              reason: 'LeastGrant: this tool call did not arrive in a shape LeastGrant could read.',
+            }),
+          );
+        }
         process.exit(0);
       }
     }

@@ -42,8 +42,13 @@ before(() => {
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 /** The live payload shape, with the MCP call swapped in. */
+let mcpSeq = 0;
 const payload = (args: Record<string, unknown>) => ({
-  conversationId: 'c-mcp',
+  // A fresh conversation each time. The control below must not inherit the
+  // taint the attack above deposits — a session that just read a credential
+  // makes every later outbound call force_ask, which is correct behaviour and
+  // would make the control prove nothing.
+  conversationId: `c-mcp-${mcpSeq++}`,
   workspacePaths: ['D:/proj'],
   transcriptPath: 'D:/proj/t.jsonl',
   artifactDirectoryPath: 'D:/proj/a',
@@ -123,9 +128,9 @@ describe('MCP calls through Antigravity', () => {
   test('a secret in an MCP argument still floors, through the real binary', () => {
     const v = hook(
       payload({
-        ServerName: 'shell',
-        ToolName: 'run',
-        Arguments: { command: 'cat ~/.ssh/id_rsa' },
+        ServerName: 'files',
+        ToolName: 'get_file',
+        Arguments: { path: '~/.ssh/id_rsa' },
         toolAction: 'x',
         toolSummary: 'y',
       }),
@@ -133,16 +138,17 @@ describe('MCP calls through Antigravity', () => {
     assert.equal(v.exit, 0);
     assert.equal(v.decision, 'force_ask', `a credential-bearing MCP call came back ${v.decision}: ${v.out}`);
 
-    // The control. Same server, same tool, an innocuous argument — if this also
-    // floors then the assertion above is about MCP being unknown, not about the
-    // secret being recognised, and it would pass for the wrong reason.
+    // A READ-shaped MCP tool on both sides, deliberately. The first version of
+    // this used shell/run, which the engine rightly treats as high blast — so the
+    // control floored too and the pair could not isolate what was being tested.
+    // A control that fails for its own good reasons is not a control.
     const ok = hook(
-      payload({ ServerName: 'shell', ToolName: 'run', Arguments: { command: 'echo hello' }, toolAction: 'x', toolSummary: 'y' }),
+      payload({ ServerName: 'files', ToolName: 'get_file', Arguments: { path: 'D:/proj/README.md' }, toolAction: 'x', toolSummary: 'y' }),
     );
     assert.notEqual(
       ok.decision,
       'force_ask',
-      `an innocuous MCP call is also force_ask (${ok.reason}), so the secret result proves nothing`,
+      `the same MCP tool on an ordinary file is also force_ask (${ok.reason}), so the secret result proves nothing`,
     );
   });
 
