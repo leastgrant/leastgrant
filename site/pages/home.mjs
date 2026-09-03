@@ -290,7 +290,7 @@ function installSection(facts) {
     <p class="eyebrow">install</p>
     <h2>Two commands</h2>
 
-    <div class="install">
+    <div class="install-box">
       <code id="install-cmd" data-clipboard="npm install -g leastgrant"><span class="prompt" aria-hidden="true">$</span>npm install -g leastgrant</code>
       <button type="button" class="copy" data-copy="install-cmd" hidden>copy</button>
     </div>

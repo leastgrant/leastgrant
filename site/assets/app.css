@@ -1193,7 +1193,7 @@ th.ta-center {
 
 /* --- install -------------------------------------------------------------- */
 
-.install {
+.install-box {
   display: flex;
   align-items: stretch;
   border: 1px solid var(--edge);
@@ -1204,7 +1204,7 @@ th.ta-center {
   font-family: var(--mono);
 }
 
-.install code {
+.install-box code {
   padding: 0.85rem 1rem;
   flex: 1;
   overflow-x: auto;
@@ -1218,7 +1218,7 @@ th.ta-center {
   gap: 0.6rem;
 }
 
-.install code .prompt {
+.install-box code .prompt {
   color: var(--dim);
   user-select: none;
 }

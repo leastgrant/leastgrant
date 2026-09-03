@@ -391,6 +391,103 @@ describe('the accessibility floor', () => {
 
 // --- claims that must stay tied to the repository --------------------------------
 
+describe('a class name means one thing', () => {
+  // The bug: `.install` was the home page's copy-a-command box, styled
+  // `display: flex`. The CLI reference then used `class="matrix install"` on a
+  // <table>, matched the same bare selector, and the table rendered as a flex
+  // row — thead and tbody side by side, every cell in the wrong place, the
+  // content running off the side of the page. It shipped, because nothing here
+  // renders CSS and every existing test passed.
+  //
+  // The general shape is a bare single-class selector that sets a layout mode,
+  // reused on an element whose own display mode matters. Tables are the case
+  // where the damage is total, so that is what this pins.
+
+  /** Single-class selectors in app.css that force a display mode, and which mode. */
+  function displayClasses() {
+    // Comments must go first. The rule regex below captures everything between
+    // the previous `}` and the next `{` as the selector, so a section banner
+    // like `/* --- install --- */` gets glued onto the front of the selector
+    // that follows it and the whole rule is silently skipped. The first version
+    // of this test did exactly that, parsed 22 of the classes, missed the one it
+    // was written for, and passed against the reintroduced bug.
+    const css = fs
+      .readFileSync(path.join(SITE, 'assets', 'app.css'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    const found = new Map();
+    // Deliberately simple: this stylesheet is hand-written and flat. A rule is
+    // `<selectors> { ... }`; we only care about rules whose selector list has a
+    // bare `.foo` in it and whose body sets `display`.
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selectors = m[1].trim();
+      const body = m[2];
+      const display = body.match(/(?:^|[;{\s])display\s*:\s*([a-z-]+)/i);
+      if (!display) continue;
+      for (const sel of selectors.split(',')) {
+        const bare = sel.trim().match(/^\.([A-Za-z0-9_-]+)$/);
+        if (bare) found.set(bare[1], display[1].toLowerCase());
+      }
+    }
+    return found;
+  }
+
+  test('no table is handed a class that stops it being a table', () => {
+    const forced = displayClasses();
+    const offenders = [];
+
+    for (const { file, html } of pages) {
+      for (const tag of html.match(/<table\b[^>]*>/g) || []) {
+        const cls = tag.match(/\bclass="([^"]*)"/);
+        if (!cls) continue;
+        for (const name of cls[1].split(/\s+/).filter(Boolean)) {
+          const mode = forced.get(name);
+          // `table` and the row/cell modes are fine; anything else destroys the
+          // table box and every cell position with it.
+          if (mode && !/^(table|inline-table|revert|initial|unset)$/.test(mode)) {
+            offenders.push(`${file}: <table class="${cls[1]}"> — .${name} sets display:${mode}`);
+          }
+        }
+      }
+    }
+
+    assert.deepEqual(
+      offenders,
+      [],
+      'a bare class is overriding a table\'s display:\n  ' + offenders.join('\n  '),
+    );
+  });
+
+  test('every class the stylesheet forces a display on is used deliberately', () => {
+    // The other half of the same problem: a bare layout class is only safe while
+    // exactly one kind of element wears it. If two different tags carry it, the
+    // rule is doing two jobs and the next reuse is the one that breaks.
+    const forced = displayClasses();
+    const wearers = new Map();
+
+    for (const { html } of pages) {
+      for (const tag of html.match(/<([a-z][a-z0-9]*)\b[^>]*\bclass="[^"]*"[^>]*>/g) || []) {
+        const name = tag.match(/^<([a-z][a-z0-9]*)/)[1];
+        const cls = tag.match(/\bclass="([^"]*)"/)[1];
+        for (const c of cls.split(/\s+/).filter(Boolean)) {
+          if (!forced.has(c)) continue;
+          if (!wearers.has(c)) wearers.set(c, new Set());
+          wearers.get(c).add(name);
+        }
+      }
+    }
+
+    // Reported, not enforced as zero: several of these are legitimately generic
+    // (a `.shell` wrapper is a div everywhere). The assertion is narrower — no
+    // class may be worn by both a table and something else, which is exactly the
+    // collision that shipped.
+    const mixed = [...wearers.entries()]
+      .filter(([, tags]) => tags.has('table') && tags.size > 1)
+      .map(([c, tags]) => `.${c} is worn by ${[...tags].join(' and ')}, and sets display:${forced.get(c)}`);
+
+    assert.deepEqual(mixed, [], mixed.join('\n  '));
+  });
+});
+
 describe('the site does not invent facts', () => {
   test('the version on the page is the version in package.json', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(SITE, '..', 'package.json'), 'utf8'));
