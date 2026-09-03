@@ -236,12 +236,74 @@ const TOOL_MAP: Record<string, Mapping> = {
   read_url_content: { tool: 'WebFetch', args: { Url: 'url' } },
 };
 
-export function toolNameOf(name: string): string {
+/**
+ * MCP arrives as one tool carrying the real one in its arguments.
+ *
+ * Antigravity does not expose `mcp__server__tool` the way Claude Code does. It
+ * sends a single `call_mcp_tool` with `{ServerName, ToolName, Arguments}` —
+ * captured live, not guessed. Left unmapped that is an opaque call, and the
+ * engine correctly refuses to account for it, so EVERY MCP call came back
+ * `force_ask`: an unsuppressible prompt, forever, for `browser_snapshot` and
+ * `list-clients` alike. Safe, and unusable, which in this product is its own
+ * kind of failure — a layer people turn off enforces nothing.
+ *
+ * Rebuilding the engine's own `mcp__server__tool` spelling puts these calls
+ * back under the machinery that already exists for them: the read/write tiering
+ * by tool name, the argument-aware signature that stops
+ * `get_document({})` from approving `get_document({destructive:true})`, and the
+ * secret-path guards on MCP arguments. That is the same treatment every other
+ * agent's MCP calls get. It is deliberately not weaker, and it is not stronger.
+ *
+ * The server and tool names are normalised the way the engine's own matcher
+ * expects — `roblox-mcp` and `list-clients` become `roblox_mcp` and
+ * `list_clients`, because a hyphen is not part of the `mcp__a__b` shape and a
+ * name that fails to split reads as one opaque token again.
+ */
+const MCP_TOOL = 'call_mcp_tool';
+
+const mcpPart = (v: unknown): string =>
+  typeof v === 'string' ? v.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') : '';
+
+export function toolNameOf(name: string, args: Record<string, unknown> = {}): string {
+  if (name === MCP_TOOL) {
+    const server = mcpPart(args['ServerName']);
+    const tool = mcpPart(args['ToolName']);
+    // Only when BOTH are present. A half-named MCP call is exactly the kind of
+    // thing that must stay unaccounted for rather than be given a plausible
+    // identity it does not have.
+    if (server && tool) return `mcp__${server}__${tool}`;
+    return name;
+  }
   return TOOL_MAP[name]?.tool ?? name;
 }
 
 /** Rename the argument keys a mapped tool uses; pass everything else through. */
 export function translateArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (name === MCP_TOOL) {
+    // Unwrap only when the identity was actually rebuilt. A half-named call
+    // keeps its whole payload: it is going to be judged as the opaque
+    // `call_mcp_tool`, and handing that an empty argument object would make an
+    // unaccountable call look like a trivial one.
+    if (toolNameOf(name, args) === MCP_TOOL) return args;
+    // Otherwise the MCP tool's own arguments are the payload; ServerName and
+    // ToolName have moved into the identity. `toolAction` and `toolSummary` are
+    // the model's narration and belong to no tool, so they are dropped rather
+    // than signed over — they vary per call and would defeat learning.
+    const inner = args['Arguments'];
+    if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner as Record<string, unknown>;
+    if (typeof inner === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(inner);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Unparseable arguments stay opaque, which floors. Correct: we cannot
+        // say what this call does.
+      }
+    }
+    return args;
+  }
   const m = TOOL_MAP[name];
   if (!m) return args;
   const out: Record<string, unknown> = { ...(m.add ?? {}) };
@@ -312,11 +374,11 @@ export function runAntigravityHook(raw: unknown): void {
     return;
   }
 
-  const tool = toolNameOf(call.name);
   const rawArgs =
     call.args && typeof call.args === 'object' && !Array.isArray(call.args)
       ? (call.args as Record<string, unknown>)
       : {};
+  const tool = toolNameOf(call.name, rawArgs);
   const args = translateArgs(call.name, rawArgs);
 
   // `run_command` carries its own working directory, which decides where every

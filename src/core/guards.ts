@@ -117,6 +117,12 @@ const CONTROL_FILES = [
   '.gemini/antigravity/brain',
   '.gemini/antigravity/implicit',
   '.gemini/antigravity/knowledge',
+  // The cached MCP tool schemas — one JSON per tool, holding the description
+  // the model is given of what that tool does. Derived from the server and
+  // regenerated, so this is the weakest member of the family, but a write here
+  // changes what the model believes a tool is for, which is instruction-shaped
+  // whatever directory it lives in.
+  '.gemini/antigravity/mcp',
   // package.json carries the scripts that `npm test` and friends run, so an
   // edit here is an edit to what a later approved command will execute.
   'package.json',

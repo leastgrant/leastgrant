@@ -79,7 +79,8 @@
     },
     "mcp": {
       "value": "gated",
-      "evidence": "source"
+      "evidence": "probe",
+      "note": "MCP arrives as a single call_mcp_tool carrying {ServerName, ToolName, Arguments}. The adapter rebuilds the engine’s own mcp__server__tool identity from it, so MCP calls get the same tiering, signature and secret guards as on any other agent. Observed live: before that mapping every MCP call was force_ask because the call was unaccountable; after it, an ordinary call asks and can become familiar, and a credential-bearing argument still floors."
     },
     "subagentSpawn": {
       "value": "unknown",
@@ -135,8 +136,8 @@
   "leastgrantLimitations": [
     "Subagent tools are not verified. invoke_subagent, define_subagent and manage_subagents exist in the runtime, but no subagent call was made during the live run, so LeastGrant has not been observed gating one.",
     "LeastGrant does not model the PreInvocation, PostInvocation, Stop or SessionStart events, and does not use the overwrite field that lets a hook rewrite a tool call’s arguments.",
-    "MCP calls were not exercised live. The user’s profile has standing MCP grants in globalPermissionGrants, so an MCP call may not have reached the permission layer at all in this session.",
-    "Verified on Windows only, through the Desktop Hub. The Unix launch form (sh -c) is not present in this build — GOOS is a compile-time constant — and the IDE surface was not exercised."
+    "Verified on Windows only, through the Desktop Hub. The Unix launch form (sh -c) is not present in this build — GOOS is a compile-time constant — and the IDE surface was not exercised.",
+    "Network and web tools are unverified. The model answered a search request from its own knowledge rather than calling a tool, so search_web and read_url_content have never been observed reaching the hook."
   ],
   "verification": {
     "live": {
@@ -248,6 +249,11 @@
       "path": "~/.gemini/antigravity/implicit",
       "what": "implicit context the runtime accumulates and replays into later sessions",
       "why": "instructions"
+    },
+    {
+      "path": "~/.gemini/antigravity/mcp",
+      "what": "cached MCP tool schemas, one per tool, holding the description of that tool the model is given",
+      "why": "mcp"
     }
   ]
 }
