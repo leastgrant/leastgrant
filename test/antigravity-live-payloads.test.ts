@@ -196,6 +196,47 @@ describe('the payloads Antigravity actually sends', () => {
     );
   });
 
+  test('a payload LeastGrant cannot read is answered, not passed over in silence', () => {
+    // Measured live: on Antigravity an empty stdout with exit 0 is treated as
+    // "no hook result" and the call PROCEEDS. So the abstain that is correct on
+    // every other agent is an allow here, and the generic parse-failure path
+    // was taking it — any truncated, malformed or non-object payload arriving
+    // with --agent antigravity was a silent allow.
+    //
+    // Not a hypothetical shape: a truncated pipe, invalid UTF-8 or an
+    // oversized payload all land here.
+    for (const bad of ['{"toolCall":', 'not json at all', '', '[]', 'null', '"a string"', '42']) {
+      const r = hook('pre', bad);
+      assert.ok(
+        r.out.length > 0,
+        `${JSON.stringify(bad)} produced silence, which this host reads as allow`,
+      );
+      assert.equal(
+        r.decision,
+        'force_ask',
+        `${JSON.stringify(bad)} came back ${r.decision} — an unreadable call must reach a person, ` +
+          `and must not be satisfiable by a cached grant`,
+      );
+      assert.equal(r.exit, 0, `${JSON.stringify(bad)} exited ${r.exit}; a non-zero exit blocks everything`);
+    }
+  });
+
+  test('the same garbage on Claude Code still abstains, because there silence is honest', () => {
+    // The control for the test above. Claude Code, Codex, Copilot and Cursor
+    // read an empty response as "no opinion" and fall back to their own
+    // permission flow. Answering `force_ask` there would be inventing a verdict
+    // out of our own parse failure, and it would make every one of those agents
+    // prompt whenever LeastGrant hiccuped.
+    const r = spawnSync(process.execPath, [CLI, 'hook', '--agent', 'claude-code'], {
+      input: 'not json at all',
+      encoding: 'utf8',
+      env: { ...process.env, LEASTGRANT_HOME: STATE, HOME, USERPROFILE: HOME },
+      timeout: 30_000,
+    });
+    assert.equal((r.stdout ?? '').trim(), '', 'Claude Code should abstain on an unreadable payload');
+    assert.equal(r.status, 0);
+  });
+
   test('the real argument keys are the ones the adapter translates', () => {
     // Captured from the wire: run_command carries IsDaemon, not Blocking, and
     // write_to_file carries Description and Overwrite. Recorded so that a

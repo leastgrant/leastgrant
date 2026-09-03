@@ -107,7 +107,28 @@ export async function runHook(): Promise<void> {
   try {
     input = JSON.parse(await readStdin()) as HookInput;
   } catch {
-    // Nothing we can say about a call we cannot read.
+    // Nothing we can say about a call we cannot read — but "say nothing" does
+    // not mean the same thing on every agent.
+    //
+    // Claude Code, Codex, Copilot and Cursor all read an empty response as an
+    // abstain and fall back to their own permission flow, so silence there is
+    // the honest answer. Antigravity does not: measured live, a hook that
+    // prints nothing and exits 0 is treated as "no hook result" and the call
+    // PROCEEDS. Silence is an allow.
+    //
+    // So an unreadable payload on Antigravity has to be answered, and the only
+    // answer available is the one that says we could not read it. `force_ask`
+    // rather than `ask`, because a cached grant must not be able to satisfy a
+    // call nobody could parse, and rather than `deny` because a malformed
+    // payload is our ignorance, not evidence of an attack.
+    if (agentFlag() === 'antigravity') {
+      process.stdout.write(
+        JSON.stringify({
+          decision: 'force_ask',
+          reason: 'LeastGrant: this tool call did not arrive in a shape LeastGrant could read.',
+        }),
+      );
+    }
     process.exit(0);
   }
 
@@ -190,8 +211,18 @@ export async function runHook(): Promise<void> {
       }
     }
   } catch (err) {
-    // Fail open, loudly in the log and silently to the agent.
+    // Fail open, loudly in the log and silently to the agent — except on
+    // Antigravity, where silence IS the open failure rather than a way of
+    // declining to have an opinion. Same reasoning as the parse failure above.
     logLine(`hook error: ${(err as Error)?.stack ?? String(err)}`);
+    if (agentFlag() === 'antigravity') {
+      process.stdout.write(
+        JSON.stringify({
+          decision: 'force_ask',
+          reason: 'LeastGrant: LeastGrant failed while judging this call, so it is asking instead.',
+        }),
+      );
+    }
     process.exit(0);
   }
 }
