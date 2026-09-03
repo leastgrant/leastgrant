@@ -107,13 +107,30 @@ function inline(src, ctx) {
     if (ch === '*' || ch === '_') {
       const strong = src.startsWith(ch + ch, i);
       const marker = strong ? ch + ch : ch;
-      const end = src.indexOf(marker, i + marker.length);
-      if (end !== -1 && end > i + marker.length) {
-        const body = src.slice(i + marker.length, end);
-        const tag = strong ? 'strong' : 'em';
-        out += `<${tag}>${inline(body, ctx)}</${tag}>`;
-        i = end + marker.length;
-        continue;
+
+      // CommonMark does not let `_` open or close emphasis inside a word, and
+      // that rule exists for exactly the text this site publishes. Without it
+      // `hook_event_name` rendered as hook<em>event</em>name — the underscores
+      // eaten, the middle italicised — and the same happened to thirteen
+      // identifiers across the docs, including ones a reader is meant to copy.
+      // `*` keeps the looser behaviour; nothing here is written `snake*case`.
+      const wordish = (c) => c !== undefined && /[A-Za-z0-9]/.test(c);
+      const intraword = ch === '_' && wordish(src[i - 1]);
+
+      if (!intraword) {
+        let end = src.indexOf(marker, i + marker.length);
+        // The closer has to clear the same bar, or `a_b_c` would still match on
+        // its second underscore.
+        while (ch === '_' && end !== -1 && wordish(src[end + marker.length])) {
+          end = src.indexOf(marker, end + marker.length);
+        }
+        if (end !== -1 && end > i + marker.length) {
+          const body = src.slice(i + marker.length, end);
+          const tag = strong ? 'strong' : 'em';
+          out += `<${tag}>${inline(body, ctx)}</${tag}>`;
+          i = end + marker.length;
+          continue;
+        }
       }
     }
 
@@ -316,7 +333,17 @@ export function render(source, ctx = {}) {
     // An autolink -- `<https://example.com>` -- starts with `<` and a letter
     // too, so it has to be excluded explicitly or every autolink on its own
     // line disappears.
-    if (/^\s*<\/?[a-zA-Z][\w-]*(\s|\/?>|$)/.test(line) && !/^\s*<[a-zA-Z][\w+.-]*:/.test(line)) {
+    //
+    // Only when a paragraph is not already open. A wrapped line is a
+    // continuation, not a new block, and `docs/privacy.md` has a sentence whose
+    // second line begins `<pattern>` — the tail of an inline code span split
+    // across lines. This rule matched it, dropped the whole line, and published
+    // a sentence that stopped halfway with a stray backtick.
+    if (
+      para.length === 0 &&
+      /^\s*<\/?[a-zA-Z][\w-]*(\s|\/?>|$)/.test(line) &&
+      !/^\s*<[a-zA-Z][\w+.-]*:/.test(line)
+    ) {
       flushParagraph(para);
       i++;
       continue;
@@ -376,15 +403,33 @@ function list(lines, start, ctx) {
     }
     if (!current) break;
 
-    // A blank line inside a list is only a continuation if something indented
-    // follows it; otherwise the list has ended.
+    // A blank line inside a list ends it only if what follows is not more of
+    // the same list.
+    //
+    // It used to end the list unconditionally unless the next line was
+    // indented, which meant an ordinary loose list — blank lines between items,
+    // which is how most of these documents are written — came out as one
+    // single-item list per item. The six-step decision walkthrough published as
+    // six separate lists, so it lost its numbering and its shared bullet run.
     if (!line.trim()) {
-      const nxt = lines[i + 1];
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      const nxt = lines[j];
+
+      // Indented: a second block belonging to the item we are already in.
       if (nxt && /^\s+\S/.test(nxt) && nxt.match(/^(\s*)/)[1].length > baseIndent) {
         current.push('');
         i++;
         continue;
       }
+
+      // Another marker of the same kind at the same indent: same list, loose.
+      const cont = nxt && nxt.match(/^(\s*)([-*+]|\d+[.)])\s+/);
+      if (cont && cont[1].length === baseIndent && /\d/.test(cont[2]) === ordered) {
+        i = j;
+        continue;
+      }
+
       break;
     }
 

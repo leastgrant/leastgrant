@@ -94,6 +94,25 @@ export function cls(...names) {
 }
 
 /**
+ * Escape text, then render the one piece of Markdown it is allowed to contain.
+ *
+ * The compatibility records and the bypass corpus are written by people, in
+ * prose, and that prose uses backticks the way the rest of the repository does:
+ * `preToolUse`, `failClosed`, `guard.secret-read`. Those fields were inserted
+ * with `esc()` alone, so 98 code spans across 11 pages published as literal
+ * backtick characters in the running text.
+ *
+ * Escaping happens FIRST and unconditionally. By the time the code-span pass
+ * runs there is no live markup left in the string, so the only tags that can
+ * reach the page are the `<code>` pair this function adds. Nothing else in
+ * Markdown is honoured — a record note is data, and the set of things it may
+ * turn into stays deliberately tiny.
+ */
+export function codeSpans(value) {
+  return esc(String(value ?? '')).replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/**
  * "A", "A and B", "A, B and C".
  *
  * For lists that are generated from the repository but have to read as a

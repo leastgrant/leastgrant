@@ -1,4 +1,4 @@
-import { esc, attr } from '../lib/html.mjs';
+import { esc, attr, codeSpans } from '../lib/html.mjs';
 import { page } from '../lib/layout.mjs';
 
 /**
@@ -157,7 +157,7 @@ const toneForLevel = (level) =>
 function agentSection({ agent, level, findings }) {
   const limits = (title, items) =>
     items.length
-      ? `<h4>${esc(title)}</h4><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
+      ? `<h4>${esc(title)}</h4><ul>${items.map((i) => `<li>${codeSpans(i)}</li>`).join('')}</ul>`
       : '';
 
   const evidenceNote = agent.osTested.length
@@ -177,7 +177,7 @@ function agentSection({ agent, level, findings }) {
     <ul class="findings">
       ${findings
         .filter((f) => f.status !== 'info')
-        .map((f) => `<li data-tone="${attr(f.status)}">${esc(f.text)}</li>`)
+        .map((f) => `<li data-tone="${attr(f.status)}">${codeSpans(f.text)}</li>`)
         .join('')}
     </ul>
 

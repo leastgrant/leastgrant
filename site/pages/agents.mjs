@@ -23,7 +23,7 @@
  * having exercised them. Showing one number would have to lie about one of them.
  */
 
-import { esc, attr } from '../lib/html.mjs';
+import { esc, attr, codeSpans } from '../lib/html.mjs';
 import { page } from '../lib/layout.mjs';
 import { LEVEL_LABEL } from '../../dist/src/core/compatibility.js';
 
@@ -78,12 +78,12 @@ function graded(o, group, key) {
 function runLine(kind, run, label) {
   if (!run) return `<li class="u"><strong>${esc(label)}</strong> — no record</li>`;
   if (!run.done) {
-    return `<li data-done="no"><strong>${esc(label)}</strong> — not done. ${esc(
+    return `<li data-done="no"><strong>${esc(label)}</strong> — not done. ${codeSpans(
       run.blockedBy ?? 'no reason recorded',
     )}</li>`;
   }
   const where = [run.version, (run.os ?? []).join(', '), run.date].filter(Boolean).join(' · ');
-  return `<li data-done="yes"><strong>${esc(label)}</strong> — ${esc(run.what ?? '')} <span class="where">${esc(
+  return `<li data-done="yes"><strong>${esc(label)}</strong> — ${codeSpans(run.what ?? '')} <span class="where">${esc(
     where,
   )}</span></li>`;
 }
@@ -113,13 +113,13 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       const [word, tone] = CONTROL_KIND[cp.why] ?? [cp.why, 'warn'];
       return `<tr><th><code>${esc(cp.path)}</code></th>` +
         `<td class="v" data-tone="${attr(tone)}"><span>${esc(word)}</span></td>` +
-        `<td class="n">${esc(cp.what)}</td></tr>`;
+        `<td class="n">${codeSpans(cp.what)}</td></tr>`;
     })
     .join('\n        ');
 
   const interceptRows = Object.entries(a.interception ?? {})
     .map(
-      ([k, f]) => `<tr><th>${esc(humanise(k))}</th>${graded(a, 'interception', k)}<td class="n">${esc(
+      ([k, f]) => `<tr><th>${esc(humanise(k))}</th>${graded(a, 'interception', k)}<td class="n">${codeSpans(
         f?.note ?? '',
       )}</td></tr>`,
     )
@@ -141,16 +141,16 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
         <span class="badge" data-tone="info">${esc((a.osTested ?? []).join(', ') || 'no OS recorded')}</span>
       </div>
 
-      <p class="lede">${esc(gradeMeaning)}.</p>
+      <p class="lede">${codeSpans(gradeMeaning)}.</p>
 
       <h2 id="what-it-does">How it attaches</h2>
-      <p>${esc(a.mechanism ?? 'No integration mechanism recorded.')}</p>
+      <p>${codeSpans(a.mechanism ?? 'No integration mechanism recorded.')}</p>
       ${
         a.install
           ? `<p>Install it with <code>${esc(a.install)}</code>. Configuration is written to
              <code>${esc(a.configPath ?? 'the agent’s own settings file')}</code>, alongside anything
              already there — LeastGrant never removes a hook it did not add.</p>`
-          : `<p><strong>No adapter ships for this agent.</strong> ${esc(a.deferredBecause ?? '')}</p>`
+          : `<p><strong>No adapter ships for this agent.</strong> ${codeSpans(a.deferredBecause ?? '')}</p>`
       }
 
       <h2 id="verdicts">What a verdict does here</h2>
@@ -159,9 +159,9 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       <table class="matrix">
         <thead><tr><th>verdict</th><th>lands?</th><th>what actually happens</th></tr></thead>
         <tbody>
-          <tr><th>allow</th>${graded(a, 'verdicts', 'allow')}<td class="n">${esc(note(a, 'verdicts', 'allow'))}</td></tr>
-          <tr><th>ask</th>${graded(a, 'verdicts', 'ask')}<td class="n">${esc(note(a, 'verdicts', 'ask'))}</td></tr>
-          <tr><th>deny</th>${graded(a, 'verdicts', 'deny')}<td class="n">${esc(note(a, 'verdicts', 'deny'))}</td></tr>
+          <tr><th>allow</th>${graded(a, 'verdicts', 'allow')}<td class="n">${codeSpans(note(a, 'verdicts', 'allow'))}</td></tr>
+          <tr><th>ask</th>${graded(a, 'verdicts', 'ask')}<td class="n">${codeSpans(note(a, 'verdicts', 'ask'))}</td></tr>
+          <tr><th>deny</th>${graded(a, 'verdicts', 'deny')}<td class="n">${codeSpans(note(a, 'verdicts', 'deny'))}</td></tr>
         </tbody>
       </table>
 
@@ -169,7 +169,7 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       <p>${
         a.modes?.exposesMode?.value
           ? `This agent tells the hook which permission mode it is in${
-              note(a, 'modes', 'exposesMode') ? ` — ${esc(note(a, 'modes', 'exposesMode'))}` : '.'
+              note(a, 'modes', 'exposesMode') ? ` — ${codeSpans(note(a, 'modes', 'exposesMode'))}` : '.'
             }`
           : 'This agent does not tell the hook which mode it is in, so LeastGrant cannot distinguish an attended session from an unattended one and treats every session as unattended.'
       }</p>
@@ -183,22 +183,22 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
                      .join(', ')}.`
                  : '<strong>An <code>ask</code> reaches a person in none of them.</strong>'
              }
-             ${esc(a.modes?.askSurvivesNote ?? '')}</p>`
+             ${codeSpans(a.modes?.askSurvivesNote ?? '')}</p>`
           : ''
       }
 
       <h2 id="failure">When the hook breaks</h2>
       <p>The question nobody asks until it matters: if LeastGrant crashes, times out, or cannot
         start, does the tool call still run?</p>
-      <ul class="facts">
+      <ul class="failure-list">
         <li><strong>On crash</strong> — ${esc(val(a, 'failure', 'onCrash') === 'closed' ? 'the call is refused' : val(a, 'failure', 'onCrash') === 'open' ? 'the call runs anyway' : 'not established')}.
-          <em>(${esc(evidence(a, 'failure', 'onCrash'))})</em> ${esc(note(a, 'failure', 'onCrash'))}</li>
+          <em>(${esc(evidence(a, 'failure', 'onCrash'))})</em> ${codeSpans(note(a, 'failure', 'onCrash'))}</li>
         <li><strong>On timeout</strong> — ${esc(val(a, 'failure', 'onTimeout') === 'closed' ? 'the call is refused' : val(a, 'failure', 'onTimeout') === 'open' ? 'the call runs anyway' : 'not established')},
           after ${esc(String(val(a, 'failure', 'timeoutDefaultSeconds')))}s by default.
-          ${esc(note(a, 'failure', 'onTimeout'))}</li>
+          ${codeSpans(note(a, 'failure', 'onTimeout'))}</li>
         <li><strong>Can it be made to fail closed?</strong> —
           ${val(a, 'failure', 'canFailClosed') === 'true' ? 'yes' : 'no'}.
-          ${esc(note(a, 'failure', 'canFailClosed'))}</li>
+          ${codeSpans(note(a, 'failure', 'canFailClosed'))}</li>
       </ul>
 
       <h2 id="coverage">What it can see</h2>
@@ -250,7 +250,7 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       <h2 id="limitations">What it cannot do</h2>
       <p>Not a disclaimer. The point of everything above is that this list exists and is specific.</p>
       <ul class="limits">
-        ${limits.map((l) => `<li>${esc(l)}</li>`).join('\n        ') || '<li>Nothing recorded.</li>'}
+        ${limits.map((l) => `<li>${codeSpans(l)}</li>`).join('\n        ') || '<li>Nothing recorded.</li>'}
       </ul>
     </article>
   </div>`;
@@ -333,7 +333,7 @@ export function agentsIndex(facts, entries) {
           .map(({ agent: a }) => {
             const first = (a.upstreamLimitations ?? [])[0] ?? (a.leastgrantLimitations ?? [])[0];
             if (!first) return '';
-            return `<li><a href="/docs/agents/${attr(a.id)}/"><strong>${esc(a.name)}</strong></a> — ${esc(first)}</li>`;
+            return `<li><a href="/docs/agents/${attr(a.id)}/"><strong>${esc(a.name)}</strong></a> — ${codeSpans(first)}</li>`;
           })
           .filter(Boolean)
           .join('\n        ')}

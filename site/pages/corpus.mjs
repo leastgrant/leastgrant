@@ -1,4 +1,4 @@
-import { esc, attr } from '../lib/html.mjs';
+import { esc, attr, codeSpans } from '../lib/html.mjs';
 import { page } from '../lib/layout.mjs';
 
 /**
@@ -47,7 +47,7 @@ export function corpus(facts, data) {
       ([cls, cases]) => `<section>
   <div class="shell">
     <h3 id="${attr(cls)}">${esc(cls.replace(/-/g, ' '))}</h3>
-    <p>${esc(data.classes[cls] ?? '')}</p>
+    <p>${codeSpans(data.classes[cls] ?? '')}</p>
     <div class="table-wrap">
       <table class="corpus">
         <thead>
@@ -58,7 +58,7 @@ export function corpus(facts, data) {
             .map(
               (c) => `<tr>
             <td><code>${esc(c.command)}</code>${wire(c)}</td>
-            <td>${esc(c.note)}</td>
+            <td>${codeSpans(c.note)}</td>
           </tr>`,
             )
             .join('')}

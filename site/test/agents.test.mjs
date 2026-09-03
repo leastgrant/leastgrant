@@ -157,10 +157,19 @@ describe('the pages and the records agree on the facts', () => {
     for (const a of records) {
       const html = pageFor(a.id);
       for (const limit of [...(a.upstreamLimitations ?? []), ...(a.leastgrantLimitations ?? [])]) {
-        const fragment = limit.split(/[.—]/)[0].trim().slice(0, 40);
+        // Backticks stripped from both sides: they are Markdown in the record
+        // and <code> on the page, so neither spelling matches the other.
+        const fragment = limit.split(/[.—]/)[0].trim().slice(0, 40).replace(/`/g, '');
         if (fragment.length < 12) continue;
+        const text = html
+          .replace(/<[^>]+>/g, '')
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&');
         assert.ok(
-          html.includes(escapeHtml(fragment)),
+          text.includes(fragment),
           `${a.id}: a recorded limitation is missing from the page ("${fragment}…")`,
         );
       }

@@ -1306,6 +1306,47 @@ th.ta-center {
   padding: 1.1rem 1.15rem;
 }
 
+/*
+ * Stacked panels for prose, sharing the hairline treatment of `.facts` without
+ * being it.
+ *
+ * The six agent pages used `<ul class="facts">` for the "when the hook breaks"
+ * block. `.facts` is a card grid whose entire appearance comes from children
+ * carrying `.fact`; bare `<li>`s have no background and no padding, so the block
+ * rendered as one flat slab of `--line` with the text against its borders, the
+ * `.prose ul` indent showing as a bare stripe inside the left edge, and disc
+ * markers floating in the previous column's text. Same shape as the `.install`
+ * collision: one class, two kinds of element.
+ *
+ * A column rather than a grid because these are sentences of unequal length,
+ * not stat tiles. The `.prose` half of the selector is load-bearing — `.prose ul`
+ * is more specific than a lone class and would put the indent back.
+ */
+.failure-list,
+.prose .failure-list {
+  list-style: none;
+  margin: 1.2rem 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.failure-list > li {
+  background: var(--pit);
+  padding: 0.95rem 1.15rem;
+}
+
+.failure-list > li em {
+  color: var(--dim);
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
 .fact dt {
   font-family: var(--mono);
   font-size: 0.72rem;

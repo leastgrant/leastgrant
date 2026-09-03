@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCompatibility } from '../../dist/src/core/compatibility.js';
+import { codeSpans } from '../lib/html.mjs';
 
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(SITE, 'dist');
@@ -798,16 +799,21 @@ describe('the compatibility page tells the truth about what does not work', () =
     // The first version escaped each limitation into a pattern, which is a lot
     // of backslashes standing between the test and what it means, and it broke
     // on the apostrophe in "Cursor's" before it ever ran.
+    // Tags stripped as well as entities decoded. A backtick in a record note
+    // is Markdown, not text: it renders as <code>, so the raw string with its
+    // backticks no longer appears anywhere and comparing against the markup
+    // would only pin today's rendering. The words still have to be there.
     const plain = html()
+      .replace(/<[^>]+>/g, '')
       .replace(/&#39;/g, "'")
       .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>');
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
     for (const agent of data()) {
       for (const limit of [...agent.upstreamLimitations, ...agent.leastgrantLimitations]) {
         assert.ok(
-          plain.includes(limit),
+          plain.includes(limit.replace(/`/g, '')),
           `${agent.id}: this limitation never reaches the page — ${limit.slice(0, 70)}`,
         );
       }
@@ -883,5 +889,40 @@ describe('the corpus page publishes exactly what the tests run', () => {
     const page = html();
     assert.match(page, /does not mean LeastGrant is secure/i);
     assert.match(page, /nobody has thought of/i);
+  });
+});
+
+describe('prose from the records renders as prose', () => {
+  test('no code span reaches the page as a literal backtick', () => {
+    // The compatibility records and the bypass corpus are written in Markdown
+    // prose and use backticks for identifiers. Those fields were inserted with
+    // esc() alone, so 98 code spans across 11 pages published as literal
+    // backtick characters sitting in the running text.
+    //
+    // Two exclusions, both principled. <pre> blocks are code samples, where a
+    // backtick is the sample. And a <code> element may legitimately contain one,
+    // because the bypass corpus includes shell command substitution — the case
+    // `git log \`curl …\`` is an attack payload, not a formatting mistake, and
+    // converting it would corrupt the evidence.
+    const offenders = [];
+    for (const { file, html } of pages) {
+      const running = html
+        .replace(/<pre[\s\S]*?<\/pre>/gi, '')
+        .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, '');
+      for (const hit of running.match(/`[^`\n]{1,80}`/g) || []) {
+        offenders.push(`${file}: ${hit.slice(0, 60)}`);
+      }
+    }
+    assert.deepEqual(offenders, [], 'literal backticks in running text:\n  ' + offenders.join('\n  '));
+  });
+
+  test('codeSpans escapes before it renders', () => {
+    // The whole reason this is safe: nothing live survives to the point where
+    // the <code> pair is added.
+    const out = codeSpans('a `<script>alert(1)</script>` and <b>x</b> & "q"');
+    assert.ok(out.includes('<code>'), out);
+    assert.ok(!/<script/i.test(out), `live markup survived: ${out}`);
+    assert.ok(!/<b>/.test(out), `live markup survived: ${out}`);
+    assert.ok(out.includes('&amp;') && out.includes('&quot;'), out);
   });
 });
