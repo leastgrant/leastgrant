@@ -95,7 +95,10 @@ If you can think of a shape that is not in there, add it. You do not need to fix
 pull request — a failing case with a name is a contribution on its own, and it tells us
 something we did not know.
 
-The cases live in [`corpus/bypasses.json`](corpus/bypasses.json), not in the test. Add an object to
+The cases live in
+[`corpus/bypasses.json`](https://github.com/leastgrant/leastgrant/blob/main/corpus/bypasses.json),
+not in the test. The corpus is not in the published package — it is a repository artifact — which
+is why that link leaves the tarball. Add an object to
 `cases` with an `id` of the form `class/short-name`, the `class` it belongs to (one of the keys in
 `classes`), the literal `command`, an `expect` of `not-allow`, and a one-line `note` saying what the
 shape is. `test/bypass.test.ts` iterates the file, so a case needs no test code of its own.
