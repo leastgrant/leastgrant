@@ -16,30 +16,35 @@
   "verdicts": {
     "allow": {
       "value": "honoured",
-      "evidence": "source",
-      "note": "Decision \"allow\" is one of six the runtime handles."
+      "evidence": "probe",
+      "note": "A decision of allow is applied without a prompt. Observed indirectly: every gated call whose decision was not a block proceeded, and the host reported the tool result back."
     },
     "ask": {
-      "value": "honoured",
-      "evidence": "source",
-      "note": "Two distinct asks. \"ask\" honours a cached Always-allow for the same action class; \"force_ask\" does not — EnsurePermissions never calls check() on that branch, so no prior grant and no auto-execution preset can satisfy it. LeastGrant maps a floored ask to force_ask and an unfamiliar one to ask. This is the only agent here where an ask can be made to reach a person."
+      "value": "partial",
+      "evidence": "probe",
+      "note": "The verdict lands, but whether it reaches a person depends on the host. With the user’s autoExecutionPolicy set to CASCADE_COMMANDS_AUTO_EXECUTION_EAGER, an ask on `run_command` and on `write_to_file` executed with no prompt shown. That is the host honouring its own auto-execution setting, and it is exactly why a floored action must not use this verdict."
     },
     "deny": {
       "value": "honoured",
-      "evidence": "source",
-      "note": "Enforced in the tool-call converter (applyPreToolHooks -> PreToolHookDeniedError) before the permission manager is in the path, so it is mode-independent and applies to any tool call."
+      "evidence": "probe",
+      "note": "Observed: with a deny rule in place, the command was blocked and the model was told \"The command was denied by the pre-tool hook rule: LeastGrant: LeastGrant blocked this: you set a rule to always block this.\" The reason string reaches the model verbatim."
+    },
+    "forceAsk": {
+      "value": "honoured",
+      "evidence": "probe",
+      "note": "The claim this integration exists for, verified live and under the hardest available conditions. In the same session where an ordinary ask executed with no prompt because auto-execution was set to EAGER, a force_ask on a credential read stopped the call dead: the UI showed \"Waiting for user input — Allow read access to this path?\" with LeastGrant’s own reason beneath it, offered \"Yes, and always allow\", and no PostToolUse fired. The file’s contents never reached the model. The agent then retried through run_command and was floored again."
     }
   },
   "failure": {
     "onCrash": {
-      "value": "open",
-      "evidence": "source",
-      "note": "executeCommandModeHook zeroes the output slice before returning the error, so a non-zero exit discards stdout entirely — printing a correct deny and then failing is treated as a failed hook, and a failed hook fails open. The adapter therefore exits 0 on every path."
+      "value": "closed",
+      "evidence": "probe",
+      "note": "REFUTES the earlier binary read. A hook exiting 3 does not fail open: the call was blocked and the model was told \"The command could not be executed because the pre-tool hook failed: JSON hook \\\"jsonhook__leastgrant_PreToolUse_0_0\\\" failed: command failed: exit status 3\". The static read of applyPreToolHooks logging and continuing describes iteration over the remaining hooks, not the caller, which aborts."
     },
     "onTimeout": {
-      "value": "open",
-      "evidence": "source",
-      "note": "Identical to a crash."
+      "value": "closed",
+      "evidence": "probe",
+      "note": "Also fails closed. A handler sleeping past its 10s timeout blocked the call, and the UI reported \"All tool calls are currently being blocked by this hook.\""
     },
     "timeoutDefaultSeconds": {
       "value": 30,
@@ -47,23 +52,26 @@
       "note": "Per handler, set by the integer `timeout` field. 0 or negative silently becomes 30; there is no unlimited option."
     },
     "canFailClosed": {
-      "value": false,
-      "evidence": "source",
-      "note": "No per-handler fail-closed option exists. Note the inverse hazard instead: a hook that emits JSON without a `decision` field is read as a DENY, not as an abstain."
+      "value": true,
+      "evidence": "probe",
+      "note": "Not a setting — it is the default. Crash, timeout, unparseable stdout, JSON without a decision, and an unrecognised decision string all block the call. The one way through is an empty stdout with exit 0, which the runtime treats as \"no hook result\" and lets the call proceed."
     }
   },
   "interception": {
     "shell": {
       "value": "gated",
-      "evidence": "source"
+      "evidence": "probe",
+      "note": "run_command reaches PreToolUse with CommandLine, Cwd, IsDaemon, WaitMsBeforeAsync and the tool’s own toolAction/toolSummary. Both gated and floored live."
     },
     "fileRead": {
       "value": "gated",
-      "evidence": "source"
+      "evidence": "probe",
+      "note": "view_file and find_by_name both reach PreToolUse before execution. A force_ask on view_file of a credential file blocked it with nothing reaching the model."
     },
     "fileWrite": {
       "value": "gated",
-      "evidence": "source"
+      "evidence": "probe",
+      "note": "write_to_file reaches PreToolUse with TargetFile, CodeContent, Description and Overwrite. Gated live."
     },
     "fileDelete": {
       "value": "gated",
@@ -74,8 +82,9 @@
       "evidence": "source"
     },
     "subagentSpawn": {
-      "value": "gated",
-      "evidence": "source"
+      "value": "unknown",
+      "evidence": "source",
+      "note": "invoke_subagent, define_subagent and manage_subagents exist as tool names in the runtime, but no subagent tool was invoked during the live run — the model answered the request directly instead — so nothing has been observed. Not claimed as gated."
     },
     "network": {
       "value": "gated",
@@ -86,7 +95,8 @@
   "observation": {
     "postToolUse": {
       "value": true,
-      "evidence": "source"
+      "evidence": "probe",
+      "note": "PostToolUse fires for each completed call, carries toolCall, stepIdx and error (empty string on success), and accepts {} as its result. Observed for run_command, list_dir, find_by_name and write_to_file."
     },
     "firesOnFailure": {
       "value": "unknown",
@@ -101,8 +111,8 @@
   "modes": {
     "exposesMode": {
       "value": false,
-      "evidence": "source",
-      "note": "No permission-mode field. Read from the embedded FileDescriptorProto rather than inferred from the prose docs."
+      "evidence": "probe",
+      "note": "The captured payloads carry conversationId, workspacePaths, transcriptPath, artifactDirectoryPath, modelName, stepIdx and toolCall — and no permission-mode field. LeastGrant cannot tell an attended session from an unattended one, which is why the eager auto-execution behaviour above is invisible to it."
     },
     "known": [],
     "askSurvives": [
@@ -112,28 +122,40 @@
   },
   "upstreamLimitations": [
     "The hook engine installs only when the server-delivered experiment flag json-hooks-enabled is true. It is per-session, not persisted, not readable and not overridable from the client, so LeastGrant cannot tell an enforcing session from an unenforced one.",
-    "force_ask is silently downgraded to an allow when the host sets auto_interaction_behavior=ALLOW_ALL. ResolveAutoInteraction runs before any prompt is registered and the hook gets no signal.",
-    "A non-zero exit discards the hook’s stdout entirely and a failed hook fails OPEN — applyPreToolHooks logs the error and proceeds to the next hook, leaving the tool call to run.",
-    "deny and ask do not have the same reach. deny is enforced in the tool-call converter, before the permission manager; ask and force_ask are read only by the permissions package, which a step reaches only if it declares permission targets.",
+    "An ordinary ask does not necessarily reach a person. Observed live: with autoExecutionPolicy = CASCADE_COMMANDS_AUTO_EXECUTION_EAGER, an ask on a shell command and on a file write both executed with no prompt. Only force_ask is reliable, which is why LeastGrant floors to it.",
+    "force_ask is silently downgraded to an allow when the host sets auto_interaction_behavior=ALLOW_ALL. ResolveAutoInteraction runs before any prompt is registered and the hook gets no signal. Not exercised live; read from the runtime.",
+    "An empty stdout with exit 0 lets the call through. The runtime trims the output and treats an empty result as \"no hook result\", so a handler that stands aside silently is an allow. Every other failure mode blocks.",
     "The runtime reads hooks from four workspace roots — .agents, _agents, .agent and _agent — and from plugins/<name>/hooks.json. Any of them can add a handler; the published docs mention only .agents.",
-    "An unrecognised non-empty decision string is not a deny. The switch falls through to the engine’s own permission check, so a typo in a third-party hook degrades to the default rather than to safety.",
-    "Two of the six accepted verdicts are undocumented. auto_approve is accepted by the runtime and returns a silent allow with no prompt, and appears in neither the published docs nor the hooks guide embedded in the binary; deny_unless_prior_grant appears on the web page but not in that embedded guide.",
+    "Two of the six accepted verdicts are undocumented. auto_approve is accepted by the runtime and returns a silent allow with no prompt, appearing in neither the published docs nor the hooks guide embedded in the binary; deny_unless_prior_grant appears on the web page but not in that embedded guide.",
+    "deny and ask do not have the same reach. deny is enforced in the tool-call converter, before the permission manager; ask and force_ask are read only by the permissions package, which a step reaches only if it declares permission targets.",
     "The runtime supports six hook events — PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop and SessionStart. Stop carries its own decision field. LeastGrant registers only the two tool events, so the others are unmediated.",
-    "Prompt-mode handlers exist (HookHandlerConfig.prompt, executePromptModeHook) despite the embedded guide saying only command handlers are supported. A prompt handler is a model deciding a permission question."
+    "Prompt-mode handlers exist (HookHandlerConfig.prompt, executePromptModeHook) despite the embedded guide saying only command handlers are supported. A prompt handler is a model deciding a permission question.",
+    "An unanswered force_ask blocks its conversation indefinitely. That is the intended behaviour of the verdict and it is also a way to wedge a session."
   ],
   "leastgrantLimitations": [
-    "Never run inside a real Antigravity session. The contract is read from the shipped 2.11.0 runtime; nothing has exercised it.",
-    "Which tool-name namespace PreToolUse matchers see is not settled. The runtime holds two — the model-facing names (write_to_file, list_dir, find_by_name) and names derived by lowercasing the CORTEX_STEP_TYPE_ enum (propose_code, list_directory, find). They coincide for run_command, view_file and grep_search and diverge for exactly the file-writing tools, so a smoke test passes while write gating silently does not. LeastGrant maps the model-facing names, which the documented PreToolUse example supports; only a live write can settle it.",
-    "LeastGrant does not model the PreInvocation, PostInvocation, Stop or SessionStart events, and does not use the overwrite field that lets a hook rewrite a tool call’s arguments."
+    "Subagent tools are not verified. invoke_subagent, define_subagent and manage_subagents exist in the runtime, but no subagent call was made during the live run, so LeastGrant has not been observed gating one.",
+    "LeastGrant does not model the PreInvocation, PostInvocation, Stop or SessionStart events, and does not use the overwrite field that lets a hook rewrite a tool call’s arguments.",
+    "MCP calls were not exercised live. The user’s profile has standing MCP grants in globalPermissionGrants, so an MCP call may not have reached the permission layer at all in this session.",
+    "Verified on Windows only, through the Desktop Hub. The Unix launch form (sh -c) is not present in this build — GOOS is a compile-time constant — and the IDE surface was not exercised."
   ],
   "verification": {
     "live": {
-      "done": false,
-      "blockedBy": "Not done. The Desktop app is installed and signed in, and its language server is reachable: agentapi is a subcommand of the same language_server.exe the Desktop launches, and with ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN taken from the running process it authenticates and fetches models successfully. Starting a conversation then fails with \"project_id is required when providing project_env_config\", and agentapi exposes no flag for it. So the blocker is no longer authentication — it is that this client cannot name a project. Nothing has yet been observed firing the hook."
+      "done": true,
+      "what": "Driven through the real signed-in Antigravity Desktop window over CDP, in a disposable project with a synthetic .env, with a transparent wrapper capturing the wire bytes. Observed: the host invoking jsonhook__leastgrant_PreToolUse_0_0 by name; real PreToolUse and PostToolUse payloads for run_command, view_file, list_dir, find_by_name and write_to_file; deny blocking a command with LeastGrant’s reason shown to the model; force_ask stopping a credential read and raising a human prompt carrying LeastGrant’s reason, in the same session where an ordinary ask had been auto-executed; and the full failure matrix — non-zero exit, timeout, unparseable stdout, decision-less JSON and unknown decision all block, empty stdout allows.",
+      "version": "2.11.0",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-03"
     },
     "transport": {
-      "done": false,
-      "blockedBy": "Not done. The invocation shape is known exactly from the runtime — cmd /c on Windows, working directory set to the directory containing hooks.json, ANTIGRAVITY_CONVERSATION_ID injected into the child environment — but it has not been reproduced and driven the way Cursor’s was, because no real payload has been captured to drive it with. Reproducing it from a hand-written payload would test our own fixture, which is exactly how this adapter shipped broken twice."
+      "done": true,
+      "what": "The real invocation was observed rather than reproduced: cmd /c, working directory set to the directory containing hooks.json, payload delivered on stdin as flat protojson camelCase with no BOM, ANTIGRAVITY_CONVERSATION_ID injected into the child environment, handler named jsonhook__leastgrant_<name>_<event>_<group>_<index>. Round trip measured at 92–121 ms.",
+      "version": "2.11.0",
+      "os": [
+        "win32"
+      ],
+      "date": "2026-09-03"
     },
     "contract": {
       "done": true,

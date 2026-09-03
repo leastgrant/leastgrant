@@ -5,7 +5,7 @@
   "adapter": null,
   "configPath": "~/.config/opencode/opencode.json",
   "versionTested": "1.18.26",
-  "lastVerified": "2026-09-02",
+  "lastVerified": "2026-09-03",
   "osTested": [
     "win32"
   ],
@@ -13,7 +13,7 @@
     "darwin",
     "linux"
   ],
-  "deferredBecause": "Deferred, and the reason has now been corrected twice — each time by measurement rather than by reading, which is why it is written out at length. The original note said there is no plugin-facing verdict API. There are two. Throwing from `tool.execute.before` is a synchronous, unraceable block: it held even with `permission: {bash: \"allow\"}` and the message reached the model verbatim. And the `event` hook receives `permission.asked` with a pending request id, which POST /permission/{requestID}/reply resolves — a plugin replying `reject` stopped a real call, and replying `once` let one run with no human anywhere. What defers it is what those two cannot cover. POST /session/{id}/shell bypasses `tool.execute.before` completely. Measured: with a plugin throwing unconditionally, the command still ran and still created its file. A permission layer with a documented endpoint that walks around it is not a permission layer. The reply channel is first-writer-wins rather than a gate. Permission.reply deletes the pending entry before resolving, so whoever answers first decides. The plugin beat an auto-approving client by 20ms; with 300ms of deliberation the auto-approver won and the call RAN. Same policy, opposite outcome, decided by latency. The endpoint is also unauthenticated by default, so the channel LeastGrant would deny through is equally open to anything on localhost to allow through. A plugin whose module throws is skipped silently, with nothing on the server output — so a broken LeastGrant would be absent rather than loud. And a second permission stack ships in the same binary. PermissionV2 has its own assert/ask/reply, sqlite-persisted grants, and twelve parallel tool implementations that call PermissionV2.assert directly; every plugin tool-hook trigger site sits outside that region. That is source-inferred, not measured — a v2 session could not be driven to complete a model turn — but it is the thing that would silently retire any adapter built on tool.execute.before. `permission.ask` remains typed and never fired, confirmed three ways, and the official docs have quietly dropped it while the types keep it. That is removal in progress, not implementation pending, so waiting for it is not indicated.",
+  "deferredBecause": "Deferred, and the reason is now measured rather than read. Three execution paths were driven against a running 1.18.26 instance, each with a control proving the plugin was loaded and blocking on the equivalent normal path. What works is better than previously recorded. Throwing from `tool.execute.before` is a genuine unraceable boundary: Plugin.trigger awaits every hook sequentially and routes rejections through Effect.promise, which makes them unrecoverable defects, so the throw always precedes execution. It held against an explicit `permission: {bash: \"allow\"}` and it covers every agent-initiated tool call, MCP included. What defeats it is that the agent tool layer is not the only way to execute. POST /session/{id}/shell ran a command and created its marker file while the plugin threw unconditionally. Only `shell.env` fired, and that hook is handed {cwd, sessionID, callID} with no command string, so it cannot make a content-based decision even though it is awaited. The result is then recorded in session history as a part of type \"tool\" named \"bash\" — so a layer auditing the transcript sees something indistinguishable from an approved tool call. Command-template interpolation executes before the only hook that could stop it. In a `/command` file, a backticked shell section ran at 23:50:59.304Z and `command.execute.before` fired at 23:50:59.319Z — 15ms too late, and by then the hook’s own input already contains the command’s OUTPUT rather than the command, so it cannot even see what ran. Making that hook throw returned HTTP 500 and aborted the command, and the marker file had already been written. $ARGUMENTS is substituted BEFORE the backtick extraction, so caller-supplied arguments are shell-interpreted: an argument containing `&&` executed a second, separate command with no pre-execution hook at all. GET /file/content returned file bytes with zero hooks and zero permission events, where the `read` tool on the same file was intercepted and blocked. Absolute paths and `../` are rejected, but the caller-supplied `directory` parameter relocates the root, which was used to read a file outside the session’s project directory. All three are reachable over a server that is unauthenticated by default — 127.0.0.1:4096, with HTTP Basic available only if OPENCODE_SERVER_PASSWORD is set, and a startup warning when it is not. Anything on loopback can drive them. Two structural facts say this is a boundary rather than a gap. PermissionV2.Source is a union with exactly one member, {type:\"tool\", messageID, callID} — a permission request can only be provenanced to a tool call, so non-tool execution is not unchecked but unrepresentable, and no external component can widen that from outside. And the plugin loader itself sits above the policy layer: an agent that can write .opencode/plugin/*.js, add a plugin dependency, or register a stdio MCP server obtains code execution at startup alongside and outranking any adapter LeastGrant ships. Also measured: the TUI’s `auto` mode auto-replies \"once\" to every permission request through the same unauthenticated route, and permission replies are first-writer-wins, so a local process can answer before the human sees the prompt. A scoped adapter is conceivable — \"agent tool calls are mediated, HTTP shell, command templates and server-side reads are not\" — but an autonomous agent on this machine can reach all three, which is the case the scoped outcome explicitly excludes. What would make support safe upstream: a hook that the /shell and /command paths also traverse, a permission source that can be provenanced to something other than a tool call, and authentication on the local server by default.",
   "verdicts": {
     "allow": {
       "value": "partial",
@@ -52,11 +52,12 @@
     "shell": {
       "value": "partial",
       "evidence": "probe",
-      "note": "tool.execute.before covers model-invoked tools, but POST /session/{id}/shell executes a shell command with no permission check and no event at all. Verified live against a config that denied `rm *`."
+      "note": "The bash tool is gated and a plugin throw blocks it unraceably, measured against an explicit allow policy. POST /session/{id}/shell runs a command on the same session with the hook never called, and command-template interpolation runs before the only hook that covers it."
     },
     "fileRead": {
-      "value": "observed",
-      "evidence": "source"
+      "value": "partial",
+      "evidence": "probe",
+      "note": "The `read` tool is intercepted and a throw blocks it. GET /file/content returns the same file’s bytes over the unauthenticated local server with no hook and no permission event, and its `directory` parameter relocates the root outside the session’s project."
     },
     "fileWrite": {
       "value": "observed",
@@ -105,11 +106,17 @@
     "askSurvives": []
   },
   "upstreamLimitations": [
-    "permission.ask is declared in the plugin types and never fired. Building on it would produce an adapter that appears installed and enforces nothing.",
-    "A plugin that fails to load is silently skipped, with no warning, and the agent runs unpoliced.",
-    "No hook timeout of any kind, so a slow hook hangs the agent rather than failing.",
-    "POST /session/{id}/shell runs commands with no permission check and no event.",
-    "Mutating tool args in a plugin changes what the permission engine evaluates, so plugin order decides the verdict."
+    "permission.ask is declared in the plugin types and dispatched nowhere — `trigger(\"permission.ask\"` occurs zero times in the shipped bundle. Building on it would produce an adapter that appears installed and enforces nothing.",
+    "There is no ctx.permission.hook(\"evaluate\") in 1.18.26 or in the published 1.18.27. The v2 PluginContext exposes no permission domain, and no documentation page mentions one. The internal `evaluate` is a pure function over a ruleset with no extension point.",
+    "POST /session/{id}/shell executes a shell command without calling tool.execute.before or any permission gate, and records the result in session history as a tool part named \"bash\".",
+    "Command-template interpolation executes before command.execute.before, which therefore cannot prevent it and cannot even see the command — by the time it fires, its input holds the command’s output.",
+    "$ARGUMENTS is substituted into a command template before the shell section is extracted, so caller-supplied arguments are shell-interpreted.",
+    "GET /file/content returns file bytes with no hook and no permission event, and its `directory` parameter relocates the root outside the session’s project directory.",
+    "The local server is unauthenticated by default. HTTP Basic is available only when OPENCODE_SERVER_PASSWORD is set; without it the process prints a warning and serves anyway.",
+    "PermissionV2.Source admits exactly one shape, {type:\"tool\"}. Execution that is not a tool call cannot be expressed as a permission request at all, so the boundary cannot be widened from outside.",
+    "Plugins are loaded at startup from the config directory and run above the policy layer, so an agent able to write a plugin file, add a plugin dependency, or register a stdio MCP server outranks any adapter.",
+    "The TUI’s auto mode auto-replies \"once\" to every permission request, and replies are first-writer-wins over the same unauthenticated route.",
+    "Two permission stacks ship in one binary. PermissionV2 has its own assert/ask/reply with sqlite-persisted grants while the V1 path still serves ordinary sessions, and a \"always\" reply re-evaluates and silently resolves other pending requests in the session."
   ],
   "leastgrantLimitations": [
     "No adapter ships. This file records a completed evaluation, not a supported integration.",
@@ -126,12 +133,12 @@
     },
     "contract": {
       "done": true,
-      "what": "Plugin hook set, the permission reply endpoint, the tool.execute.before throw path and the shell endpoint that bypasses it established by running the real product with instrumented plugins against a deterministic model.",
+      "what": "Driven against a running 1.18.26 instance with a deterministic local model, an isolated XDG config and data root, and a plugin whose load was proven before and after the run. Confirmed at runtime: tool.execute.before blocks unraceably against an explicit allow; POST /session/{id}/shell executes with the hook never called; command-template interpolation runs 15ms before command.execute.before and survives its refusal; $ARGUMENTS is substituted before shell extraction; GET /file/content returns bytes with no hook. Each with a control on the equivalent gated path.",
       "version": "1.18.26",
       "os": [
         "win32"
       ],
-      "date": "2026-09-02"
+      "date": "2026-09-03"
     },
     "conformance": {
       "done": false,
