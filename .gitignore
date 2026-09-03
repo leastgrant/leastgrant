@@ -30,3 +30,8 @@ site/.brand-preview.*
 
 # Working notes for the cancelled post-0.5.0 sprint. Not part of the project.
 .sprint2/
+
+# Handoff notes for whoever is driving Claude on this checkout. Deliberately not
+# pushed: it is a working file about the state of the work, not part of the project,
+# and it travels by copying the folder rather than by cloning.
+CLAUDE.md
