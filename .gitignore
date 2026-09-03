@@ -27,3 +27,6 @@ site/.brand-preview.*
 
 # Working notes for the hardening sprint. Not part of the project.
 .sprint/
+
+# Working notes for the cancelled post-0.5.0 sprint. Not part of the project.
+.sprint2/
