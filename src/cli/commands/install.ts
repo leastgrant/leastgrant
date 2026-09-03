@@ -704,6 +704,13 @@ function codex(scope: 'user' | 'project', uninstall: boolean): Installed {
     }
   }
 
+  // `cfg.hooks ??= {}` above creates the key even on an uninstall, and deleting
+  // the last event then leaves `"hooks": {}` behind in a file that never had it.
+  // Harmless to Codex, and still debris: this module's header promises the diff
+  // is only the lines we meant to change, and an uninstall that adds a key has
+  // not undone itself.
+  if (uninstall && Object.keys(hooks).length === 0) delete cfg.hooks;
+
   if (changed) {
     fs.mkdirSync(dir, { recursive: true });
     writeJsonPreservingStyle(file, cfg);
