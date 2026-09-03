@@ -102,6 +102,27 @@ export function evidenceFor(decision: string, attended: boolean): 'confirmed' | 
   return decision === 'ask' && attended ? 'confirmed' : 'observed';
 }
 
+/**
+ * Must this failure be answered rather than passed over in silence?
+ *
+ * Only Antigravity reads an empty response as permission to proceed, so only
+ * Antigravity gets an invented verdict when LeastGrant cannot produce a real
+ * one. The flag is the primary signal because the installer always writes it;
+ * the shape check is the backstop for a hand-edited hooks.json that lost it,
+ * which is precisely the install where a silent allow would go unnoticed
+ * longest.
+ *
+ * Deliberately not a dynamic import of `looksLikeAntigravity`: this runs on the
+ * error path, where a second module load is one more thing that can fail.
+ */
+function answeringAntigravity(input: unknown): boolean {
+  if (agentFlag() === 'antigravity') return true;
+  if (!input || typeof input !== 'object') return false;
+  const o = input as Record<string, unknown>;
+  if (o['tool_name'] !== undefined || o['tool_input'] !== undefined) return false;
+  return typeof o['conversationId'] === 'string' || (!!o['toolCall'] && typeof o['toolCall'] === 'object');
+}
+
 export async function runHook(): Promise<void> {
   let input: HookInput;
   try {
@@ -215,7 +236,7 @@ export async function runHook(): Promise<void> {
     // Antigravity, where silence IS the open failure rather than a way of
     // declining to have an opinion. Same reasoning as the parse failure above.
     logLine(`hook error: ${(err as Error)?.stack ?? String(err)}`);
-    if (agentFlag() === 'antigravity') {
+    if (answeringAntigravity(input)) {
       process.stdout.write(
         JSON.stringify({
           decision: 'force_ask',
