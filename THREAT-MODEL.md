@@ -1080,15 +1080,29 @@ weigh before trusting this:
   an ask raises the approval UI. Cursor has no headless agent mode, so closing that gap
   needs a human driving a GUI. `beforeReadFile` is also post-execution and has no "ask":
   a deny stops the content reaching the model, and the file has already been read.
-- **The Antigravity adapter has never run inside Antigravity.** The contract was read
-  out of the shipped 153 MB Go runtime rather than from documentation, and two things the
-  first version of the adapter got wrong came from that reading: there is no
-  `hook_event_name` on the wire, because the event is a protobuf oneof, and the tool names
-  are snake_case with PascalCase argument keys. Both would have made a plausible-looking
-  adapter that never matched a single call. Completing a live run needs Google OAuth,
-  which has not been performed. Antigravity is also the only agent where LeastGrant can
-  force a prompt that a cached "always allow" cannot satisfy — the strongest ask semantics
-  of anything here, and nothing has exercised them.
+- **Antigravity has now been run live, and doing it corrected this document twice.**
+  Driven through the signed-in Desktop 2.11.0 window in a disposable project with a
+  synthetic credential file. What it established: `force_ask` on a credential read stopped
+  the call and raised a human prompt carrying LeastGrant's own reason, *in a session where
+  an ordinary `ask` had just been auto-executed with no prompt at all* because the host's
+  `autoExecutionPolicy` was set to `CASCADE_COMMANDS_AUTO_EXECUTION_EAGER`. That is the
+  distinction the whole adapter is built on, measured under the conditions that defeat the
+  weaker verdict. What it corrected: a hook that exits non-zero **fails closed**, not open
+  — the static read of `applyPreToolHooks` describes iteration over the remaining hooks,
+  while the caller aborts. Timeouts, unparseable stdout, JSON with no `decision` and an
+  unrecognised decision string all block too. The one way through is an empty stdout with
+  exit 0, which the runtime treats as "no hook result". It also settled which of the
+  runtime's two tool-name namespaces PreToolUse matchers see: the model-facing one
+  (`write_to_file`, `view_file`, `list_dir`), not the step-type-derived one
+  (`propose_code`, `list_directory`). Those two coincide for `run_command` and diverge for
+  exactly the file-writing tools, so a smoke test would have passed while write gating
+  silently did not.
+- **What Antigravity still has not shown us.** No subagent tool was invoked during the
+  run — the model answered directly instead — so `invoke_subagent`, `define_subagent` and
+  `manage_subagents` are recorded as `unknown`, not as gated. No web tool was called
+  either. `auto_interaction_behavior=ALLOW_ALL`, which the runtime resolves before any
+  prompt is registered and which would silently downgrade a `force_ask`, was not
+  exercised. Windows only, through the Hub; the IDE surface was not touched.
 - **Antigravity's hook engine can be switched off from the server.** It installs only
   when the experiment flag `json-hooks-enabled` is delivered true. That flag is
   per-session, not persisted, not readable from the client and not overridable, so

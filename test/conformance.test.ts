@@ -121,17 +121,31 @@ const SHAPES: Record<string, { event: string; shell: (cmd: string) => Record<str
   // Note what is NOT here: a way to abstain. This runtime reads a missing
   // `decision` as a deny, so the adapter always answers.
   antigravity: {
-    // No `hook_event_name`, because Antigravity does not send one — the event is
-    // a protobuf oneof. Tool names are snake_case and the shell argument key is
-    // `CommandLine`. The first version of this entry used a fabricated event
-    // name and PascalCase, so it exercised a payload the runtime never emits.
+    // Copied from a payload captured off the wire from a live Desktop 2.11.0
+    // session, not composed here. The first version of this entry invented a
+    // `hook_event_name` field and PascalCase tool names and exercised a payload
+    // the runtime never emits; the second still carried `Blocking` and
+    // `executionId`, which the wire does not send either — `IsDaemon` is the
+    // real key, and `executionId` is marked internal_only and scrubbed before
+    // delivery. `test/fixtures/antigravity-live.json` holds the originals.
     event: 'PreToolUse',
     shell: (command) => ({
       conversationId: 'conf',
       workspacePaths: [WS],
-      executionId: 'e1',
-      modelName: 'auto',
-      toolCall: { name: 'run_command', args: { CommandLine: command, Blocking: true } },
+      transcriptPath: `${WS}/t.jsonl`,
+      artifactDirectoryPath: `${WS}/a`,
+      modelName: 'gemini-3.8-flash-high',
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: command,
+          Cwd: WS,
+          IsDaemon: false,
+          WaitMsBeforeAsync: 2000,
+          toolAction: 'Running a command',
+          toolSummary: 'Run command',
+        },
+      },
       stepIdx: 19,
     }),
   },
