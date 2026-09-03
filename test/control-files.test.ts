@@ -178,6 +178,41 @@ describe('everything that decides what an agent may do later', () => {
     );
   });
 
+  test('a customization root is one where the runtime looks, not anywhere', () => {
+    // Antigravity's discovery walks UP from the workspace and never down, so
+    // `.agents` and its three siblings are customization roots at the workspace
+    // root and at its ancestors — and ordinary directory names everywhere else.
+    // They were floored at any depth, and on that agent a floored ask becomes
+    // `force_ask`: an unsuppressible prompt on `crates/_agent/Cargo.toml` and
+    // `src/_agents/pool.py`, which are common names in Rust and ML repos.
+    //
+    // Coverage is unchanged where it matters, because a `hooks.json` inside one
+    // is still floored by filename from anywhere. The danger is the file that
+    // installs a handler, not the directory it sits in.
+    for (const rel of ['.agents/plugins.json', '_agents/hooks.json', '_agent/mcp_config.json', '.agent/skills.json']) {
+      const v = write(path.join(WS, rel));
+      assert.ok(v.flooredGuards.includes('guard.agent-config'), `${rel} at the workspace root is not floored`);
+    }
+    for (const rel of [
+      'crates/_agent/Cargo.toml',
+      'src/_agents/pool.py',
+      'node_modules/pkg/_agent/index.js',
+      'vendor/.agents/README.md',
+    ]) {
+      const v = write(path.join(WS, rel));
+      assert.ok(
+        !v.flooredGuards.includes('guard.agent-config'),
+        `${rel} is nested, not a customization root, and is being floored`,
+      );
+    }
+    // But a hooks.json down there is still the file that installs a handler.
+    const nested = write(path.join(WS, 'vendor', '_agents', 'hooks.json'));
+    assert.ok(
+      nested.flooredGuards.includes('guard.agent-config'),
+      'a nested hooks.json lost its floor — the filename rule is what carries this',
+    );
+  });
+
   test('every agent in the compatibility data names where its config lives', () => {
     // A record without one cannot be checked, which would make the guard below
     // silently vacuous for that agent — the failure mode where a test protects

@@ -271,9 +271,52 @@ const isAgentInstruction = (p: string): boolean => {
   return p.split('/').some((seg) => RULES_DOTFILE.test(seg));
 };
 
-const isControlFile = (abs: string): boolean => {
+/**
+ * Directories that are a customization root only where the runtime looks for
+ * one — at the workspace root, or at an ancestor of it.
+ *
+ * Antigravity's discovery walks UP from the workspace and never down, so
+ * `crates/_agent/Cargo.toml` and `src/_agents/pool.py` are ordinary source
+ * files. They were floored anyway, at any depth — and on that agent a floored
+ * ask becomes `force_ask`, an unsuppressible prompt, on a directory name common
+ * in agent-framework and ML repositories.
+ *
+ * Anchoring costs nothing in coverage. A `hooks.json` inside one of these is
+ * still floored by filename from anywhere, and that is where the danger is:
+ * the file that installs a handler, not the directory it sits in.
+ */
+const CUSTOMIZATION_ROOTS = ['.agents', '_agents', '.agent', '_agent'];
+
+/**
+ * Is `p` at `<dir>/<name>` for `dir` equal to a root or any ancestor of one?
+ *
+ * Roots are canonicalised first. Targets already are, and comparing a resolved
+ * path against an unresolved boundary silently answers no — on Windows the two
+ * differ by 8.3 short names alone, which is enough to lose the match and was,
+ * the first time this was written.
+ */
+function underCustomizationRoot(p: string, name: string, roots: string[]): boolean {
+  for (const root of roots) {
+    let dir = canonicalDir(root).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+    while (dir) {
+      if (p === `${dir}/${name}` || p.startsWith(`${dir}/${name}/`)) return true;
+      const up = dir.slice(0, dir.lastIndexOf('/'));
+      if (!up || up === dir || /^[a-z]:$/.test(up)) break;
+      dir = up;
+    }
+  }
+  return false;
+}
+
+const isControlFile = (abs: string, roots: string[] = []): boolean => {
   const p = abs.replace(/\\/g, '/').toLowerCase();
-  if (CONTROL_FILES.some((c) => p.endsWith('/' + c) || p.includes('/' + c + '/'))) return true;
+  for (const c of CONTROL_FILES) {
+    if (CUSTOMIZATION_ROOTS.includes(c)) {
+      if (underCustomizationRoot(p, c, roots)) return true;
+      continue;
+    }
+    if (p.endsWith('/' + c) || p.includes('/' + c + '/')) return true;
+  }
   return isAgentInstruction(p);
 };
 
@@ -311,7 +354,7 @@ export function checkGuards(action: Action, ctx: GuardCtx): GuardHit[] {
           "this would modify LeastGrant's own records, which it does not allow — run leastgrant commands directly instead",
         );
       }
-    } else if (isControlFile(t.value) && action.kind !== 'file.read') {
+    } else if (isControlFile(t.value, ctx.roots) && action.kind !== 'file.read') {
       add(
         'guard.agent-config',
         'ask',

@@ -535,6 +535,34 @@ export function usableRoots(paths: unknown): string[] {
   return out;
 }
 
+/**
+ * The id that pairs a PostToolUse with the PreToolUse it completes.
+ *
+ * `??` was wrong here, and only on the empty string. The runtime marshals hook
+ * arguments with `EmitUnpopulated = true`, so every field is present even when
+ * empty — an `executionId` that exists in the proto arrives as `""` on every
+ * payload, `??` passes it through because it is not null, and a perfectly good
+ * `stepIdx` never gets a look in. Every in-flight call in the conversation then
+ * collapses onto one pending slot: measured, three Pres with distinct stepIdx
+ * left ONE pending, and the Post for the first banked evidence for the third.
+ *
+ * With neither, the id was `''` and every call in the conversation shared the
+ * single `anonymous` slot — a Post for `npm test` consumed the pending left by
+ * `rm -rf build` and recorded the delete as the evidence.
+ *
+ * So: the first value that is actually there. And when nothing is, the id is
+ * made unique per call rather than shared, because an unpaired Post that finds
+ * nothing is a lost observation, while one that finds somebody else's is a
+ * wrong one.
+ */
+function callId(input: AntigravityInput): string {
+  for (const v of [input.executionId, input.stepIdx]) {
+    if (typeof v === 'string' && v !== '') return v;
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return '';
+}
+
 export function runAntigravityHook(raw: unknown): void {
   const input = (raw ?? {}) as AntigravityInput;
   const roots = usableRoots(input.workspacePaths);
@@ -549,7 +577,7 @@ export function runAntigravityHook(raw: unknown): void {
   // tell them apart. See isPreToolUse.
   if (!isPreToolUse(input, eventFlag())) {
     try {
-      recordPost(sessionId, String(input.executionId ?? input.stepIdx ?? ''));
+      recordPost(sessionId, callId(input));
     } catch {
       /* observation must never wedge the agent */
     }
@@ -600,7 +628,7 @@ export function runAntigravityHook(raw: unknown): void {
       input: args,
       cwd,
       sessionId,
-      toolUseId: String(input.executionId ?? input.stepIdx ?? ''),
+      toolUseId: callId(input),
       permissionMode: undefined,
       ...(execCwd ? { execCwd } : {}),
     });
