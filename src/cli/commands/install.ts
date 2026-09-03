@@ -34,9 +34,75 @@ interface Installed {
   note?: string;
 }
 
-/** Absolute path to this package's CLI entry. */
+/**
+ * The command an agent will run to reach LeastGrant.
+ *
+ * It must contain no double quote at all, and that is a stronger rule than it
+ * looks. Antigravity spawns the handler as `exec.CommandContext("cmd", "/c",
+ * <command>)` — three separate arguments — so Go's `EscapeArg` rewrites any
+ * embedded `"` as `\"`, which `cmd` does not unescape. The handler then fails
+ * to start, and since a failing PreToolUse hook fails CLOSED on that runtime,
+ * every tool call is blocked and the user's only remedy is to remove
+ * LeastGrant.
+ *
+ * That is not a corner case. The default `npm i -g` location is
+ * `%APPDATA%
+pm
+ode_modules\...`, and any Windows account whose name
+ * contains a space puts a space in that path. The live verification was done
+ * from a space-free directory, so this had never been exercised.
+ *
+ * So both tokens get the 8.3 short form, not just the first. If either cannot
+ * be made quote-free, `install` refuses rather than writing a command that
+ * cannot run — a refusal a user can act on beats an install that reports
+ * success and blocks everything.
+ */
 function selfCommand(): string {
-  return `${nodeInvocation()} ${shellQuote(selfBin())} hook`;
+  return `${nodeInvocation()} ${scriptToken(selfBin())} hook`;
+}
+
+/**
+ * The script path as a token safe to embed.
+ *
+ * Same reasoning as `nodeInvocation`, applied to the second token: on Windows
+ * the 8.3 short form when the volume has one, and otherwise a quoted path,
+ * which `assertRunnable` then rejects for the agents that cannot survive it.
+ */
+function scriptToken(p: string): string {
+  if (!/[\s$`"']/.test(p)) return p;
+  if (process.platform === 'win32') {
+    const short = shortPath(p);
+    if (short && !/[\s$`"']/.test(short)) return short;
+  }
+  return shellQuote(p);
+}
+
+/**
+ * Refuse to write a command the agent cannot start.
+ *
+ * Only for the agents whose runtime escapes per argument — Antigravity is the
+ * one measured. The others take the command line verbatim or run it through a
+ * shell that unquotes properly, and quoting there is not merely safe but
+ * required.
+ */
+function assertRunnable(command: string, agent: AgentTarget): void {
+  if (agent !== 'antigravity' || !command.includes('"')) return;
+  throw new Error(
+    `LeastGrant cannot be installed into ${agent} from this location.
+` +
+      `  The path contains a character that has to be quoted:
+    ${selfBin()}
+` +
+      `  Antigravity runs hook commands as cmd /c with per-argument escaping, which turns an
+` +
+      `  embedded quote into \\" and stops the handler starting. A handler that cannot start
+` +
+      `  blocks every tool call on that agent.
+` +
+      `  Install LeastGrant somewhere without spaces or shell characters in the path, or
+` +
+      `  enable 8.3 short names on that volume.`,
+  );
 }
 
 /** dist/src/cli/commands/install.js -> ../../../../bin/leastgrant.js */
@@ -734,53 +800,102 @@ function antigravity(scope: 'user' | 'project', uninstall: boolean): Installed {
   // PreToolUse. That silently stopped `recordPost` from ever running, which
   // meant nothing on this agent ever became familiar. Labelling our own
   // handlers is the fix; nothing about it depends on the payload.
-  const commandFor = (event: 'pre' | 'post') =>
-    `${selfCommand()} --agent antigravity --event ${event}`;
+  const commandFor = (event: 'pre' | 'post') => {
+    const c = `${selfCommand()} --agent antigravity --event ${event}`;
+    assertRunnable(c, 'antigravity');
+    return c;
+  };
 
   interface Handler { command?: string; timeout?: number; [k: string]: unknown }
   interface Group { matcher?: string; hooks?: Handler[] }
   interface Spec { enabled?: boolean; PreToolUse?: Group[]; PostToolUse?: Group[]; [k: string]: unknown }
 
   const cfg = readJson<Record<string, Spec>>(file) ?? {};
-  const spec: Spec = (cfg['leastgrant'] as Spec | undefined) ?? {};
+  const existing = cfg['leastgrant'];
+  // A `leastgrant` value that is not a plain object is not a spec we can add to.
+  // `{"leastgrant": []}` used to report a successful install and write nothing:
+  // `spec[event] = groups` sets a named property on an Array, which
+  // `JSON.stringify` discards. `readJson` refuses a non-object at the top level
+  // for exactly this reason — "the user now believes they are protected" — and
+  // the same check was missing one level down.
+  if (existing !== undefined && (typeof existing !== 'object' || existing === null || Array.isArray(existing))) {
+    throw new Error(
+      `${file} has a "leastgrant" entry that is ${Array.isArray(existing) ? 'an array' : typeof existing}, ` +
+        `not a hook specification. Fix or remove it and try again — LeastGrant will not write ` +
+        `over something it did not put there.`,
+    );
+  }
+  const spec: Spec = (existing as Spec | undefined) ?? {};
   let changed = false;
+
+  // A spec-level `enabled: false` switches every handler under it off, silently
+  // — it is documented, `JSONHookSpec.Enabled` is a `*bool` where nil means
+  // true, and nothing on our side could see it. Reinstalling over one reported
+  // "Already installed" and left enforcement entirely off.
+  if (!uninstall && spec.enabled !== undefined && spec.enabled !== true) {
+    spec.enabled = true;
+    changed = true;
+  }
 
   for (const event of ['PreToolUse', 'PostToolUse'] as const) {
     const command = commandFor(event === 'PreToolUse' ? 'pre' : 'post');
-    const groups: Group[] = (spec[event] as Group[] | undefined) ?? [];
-    // One group matching every tool. `*` is the documented catch-all and the
-    // only honest choice: a matcher listing tool names would silently stop
-    // covering whatever Antigravity adds next.
-    let group = groups.find((g) => g.matcher === '*');
+    const groups: Group[] = Array.isArray(spec[event]) ? (spec[event] as Group[]) : [];
     if (uninstall) {
       for (const g of groups) {
-        const before = (g.hooks ?? []).length;
-        g.hooks = (g.hooks ?? []).filter((h) => !isOurs(String(h.command ?? '')));
-        if ((g.hooks ?? []).length !== before) changed = true;
+        if (!g || !Array.isArray(g.hooks)) continue;
+        const before = g.hooks.length;
+        g.hooks = g.hooks.filter((h) => !isOurs(String(h?.command ?? '')));
+        if (g.hooks.length !== before) changed = true;
       }
-      const kept = groups.filter((g) => (g.hooks ?? []).length > 0);
+      const kept = groups.filter((g) => Array.isArray(g?.hooks) && g.hooks.length > 0);
       if (kept.length) spec[event] = kept;
       else delete spec[event];
       continue;
     }
-    if (!group) {
-      group = { matcher: '*', hooks: [] };
-      groups.push(group);
+
+    // Reconcile EVERY entry of ours, in every group — not the first match in
+    // the first `*` group. Repairing only the first left three real layouts
+    // broken, and one of them is worse than not installing: a handler carrying
+    // `--event post` sitting on PreToolUse answers `{}`, which this runtime
+    // reads as a hard DENY of every tool call.
+    let ours = 0;
+    for (const g of groups) {
+      if (!g || !Array.isArray(g.hooks)) continue;
+      const kept: Handler[] = [];
+      for (const h of g.hooks) {
+        if (!isOurs(String(h?.command ?? ''))) {
+          kept.push(h);
+          continue;
+        }
+        // Ours. The first one becomes canonical wherever it sits; any further
+        // copy is a duplicate and goes.
+        if (ours++ > 0) {
+          changed = true;
+          continue;
+        }
+        if (h.command !== command || h.timeout !== 10 || g.matcher !== '*') changed = true;
+        kept.push({ ...h, command, timeout: 10 });
+        g.matcher = '*';
+      }
+      if (kept.length !== g.hooks.length) changed = true;
+      g.hooks = kept;
     }
-    group.hooks ??= [];
-    const idx = group.hooks.findIndex((h) => isOurs(String(h.command ?? '')));
-    if (idx < 0) {
+
+    if (ours === 0) {
+      // One group matching every tool. `*` is the documented catch-all and the
+      // only honest choice: a matcher listing tool names would silently stop
+      // covering whatever Antigravity adds next.
+      let group = groups.find((g) => g && g.matcher === '*' && Array.isArray(g.hooks));
+      if (!group) {
+        group = { matcher: '*', hooks: [] };
+        groups.push(group);
+      }
+      group.hooks ??= [];
       group.hooks.push({ command, timeout: 10 });
       changed = true;
-    } else if (group.hooks[idx]!.command !== command) {
-      // Same refresh the other installers do: an entry of ours that names a
-      // stale path is worse than none, because it looks installed. This is also
-      // what retrofits `--event` onto an install written before the two events
-      // could be told apart — the same route the Cursor `failClosed` fix took.
-      group.hooks[idx] = { ...group.hooks[idx], command, timeout: 10 };
-      changed = true;
     }
-    spec[event] = groups;
+
+    spec[event] = groups.filter((g) => g && Array.isArray(g.hooks) && g.hooks.length > 0);
   }
 
   if (uninstall) {
