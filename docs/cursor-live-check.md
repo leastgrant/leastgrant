@@ -1,189 +1,103 @@
 # Cursor: the human-assisted live check
 
-Cursor is the one integration nothing can finish alone. `cursor --help` offers
+**Done — 2026-09-03, Cursor 3.18.25 on Windows. Six cases, all passed.**
+
+Cursor was the one integration nothing could finish alone. `cursor --help` offers
 VS Code flags plus `--chat`, which opens a window; the hooks service is a
 workbench contribution whose extension host is forked per window. There is no
-headless agent mode, so a person has to drive a GUI.
+headless agent mode, so a person had to drive the GUI.
 
-Everything that *can* be automated already has been. Cursor's Windows
-invocation was reproduced byte for byte and LeastGrant driven through it, which
-is how the UTF-8 BOM bug was found — PowerShell 5.1 prefixes the payload,
-`JSON.parse` threw, the hook exited silently, and `failClosed` turned that into
-a deny of every shell command, MCP call and file read for a whole release. What
-remains is three things a reproduction cannot establish:
+Everything else had already been automated. Cursor's Windows invocation was
+reproduced byte for byte and LeastGrant driven through it, which is how the
+UTF-8 BOM bug was found — PowerShell 5.1 prefixes the payload, `JSON.parse`
+threw, the hook exited silently, and `failClosed` turned that into a deny of
+every shell command, MCP call and file read for a whole release. Three things a
+reproduction could not establish are settled below.
 
-1. that Cursor loads `~/.cursor/hooks.json` at all,
-2. that it registers the steps LeastGrant asks for,
-3. that an `ask` raises its approval UI.
-
-This is the shortest matrix that settles those three. It should take about ten
-minutes. Anything beyond it is optional.
+The setup was machine-side: a disposable workspace with a synthetic `.env`, a
+transparent wrapper capturing the exact wire bytes and passing them through
+unchanged, and Cursor's own hooks log read alongside. The person was asked only
+what the window showed them.
 
 ---
 
-## Before you start
+## What it established
 
-Cursor version this was written against: **3.18.25**, Windows. If yours differs,
-write the real one down — the verification record is version-scoped and a
-version change invalidates it.
+**Cursor loads `~/.cursor/hooks.json` and registers the steps.** From Cursor's
+own log, before anybody typed anything:
 
-```bash
-cursor --version
+```
+Loaded 5 user hook(s) for steps: beforeShellExecution, beforeMCPExecution,
+beforeReadFile, afterShellExecution, afterMCPExecution
 ```
 
-**Set up a disposable workspace.** Do not use a real project; step 4 reads a
-credential file.
+**An `ask` reaches a person.** A curl-into-shell returned `ask` and Cursor
+raised its approval card — Skip / Always Run / Run.
 
-```bash
-mkdir D:\lg-cursor-ws
-cd D:\lg-cursor-ws
-git init
-printf 'SYNTHETIC_TOKEN=lg_probe_not_a_real_secret_0000\n' > .env
-echo hello > note.txt
-```
+**`failClosed` genuinely fails closed.** With the handler pointed at a script
+that does not exist and `failClosed: true` left exactly as the installer writes
+it, the command was blocked and the model was told
+*"Cursor blocked the terminal tool because a hook failed closed."*
 
-**Install the hook and confirm what it wrote.**
+**A `deny` outranks Cursor's own auto-run flow.** This was the strongest result.
+A command Cursor had already demonstrated it would run without prompting was
+denied outright: Cursor showed "Skipped", passed LeastGrant's reason to the
+model verbatim, and the model reported it *"did not retry or work around the
+block."* No `afterShellExecution` fired, because nothing ran.
 
-```bash
-node D:\LeastGrant\bin\leastgrant.js install cursor
-```
+## What it disproved, or rather proved the hard way
 
-```bash
-type "%USERPROFILE%\.cursor\hooks.json"
-```
+**The read caveat is now measured, not inferred.** The `beforeReadFile` payload
+arrives carrying a `content` field — the full 86 bytes of the credential file,
+synthetic token included. Cursor had read the file off disk before consulting
+the hook. The deny stopped it reaching the model, and the token appeared in no
+agent transcript, but the read had happened. That is what "observed, not gated"
+means, and now there is a byte count behind it.
 
-You should see a `version`, five `hooks` entries (`beforeShellExecution`,
-`beforeMCPExecution`, `beforeReadFile`, `afterFileEdit`, `stop`) and
-`"failClosed": true` on the before* ones. If `failClosed` is missing, you have
-an install from before that was added — run the install again, it retrofits.
+**Writes are worse than ungated.** Creating a file through Cursor's edit tool
+produced **zero hook invocations** and no ledger entry. Not observed after the
+fact — invisible. Cursor registers no before-write, before-edit or
+before-delete step.
 
-**Start the log.** Every case below is judged from this file, not from vibes:
+## The results
 
-```bash
-node D:\LeastGrant\bin\leastgrant.js trail --follow
-```
+| # | Case | Host evidence | Result |
+|---|---|---|---|
+| C0 | Hook discovery | Cursor log: all five steps loaded | PASS |
+| C1 | Shell, hook fires | before+after fired, BOM `ef bb bf` handled, ~100 ms, ledger written | PASS |
+| C1b | `ask` reaches a person | `ask` accepted as a valid response; approval card shown | PASS |
+| C2 | `ask` on a risky command | `ask` + "runs code that was just downloaded" | PASS |
+| C3 | `deny` vs auto-run | one call, `deny`, no after event, reason quoted to the model | PASS |
+| C4 | Credential read | `deny`; payload already held the content; token in no transcript | PASS |
+| C5 | Write | zero invocations, file created, ledger empty | PASS — gap confirmed |
+| C6 | `failClosed` | broken handler blocked the call | PASS |
 
-Leave that running in one terminal. Open Cursor on `D:\lg-cursor-ws` in another.
+Fourteen hook invocations captured. Every one carried a UTF-8 BOM. Every one
+parsed.
 
----
+## What is still not verified
 
-## The matrix
+- **MCP.** `beforeMCPExecution` is registered and was never invoked, so its
+  behaviour remains contract-derived.
+- **Timeout.** Only the crash path was exercised.
+- **POSIX.** Windows only. The POSIX transport passes the payload on native
+  stdin rather than through PowerShell and has not been exercised.
 
-Six cases. For each: what to type into Cursor's agent, what should happen, and
-where to look. **Record what actually happened even when it matches** — "it did
-what we expected" is the evidence.
+## Two things this run corrected in our own material
 
-### 1. The hook fires at all — shell
+The earlier version of this document said the installer registers `afterFileEdit`
+and `stop`. It registers `afterShellExecution` and `afterMCPExecution`.
 
-> Run this exact command in the terminal: `echo LEASTGRANT_CURSOR_PROBE`
+And a verdict was scored wrong mid-run. `ask` on an auto-run command was marked
+FAIL from a screenshot that did not happen to show the approval card; the person
+had been prompted and had approved it. The lesson is the one this whole exercise
+is about: an observation you did not make is not an observation, and inferring
+one from an absence is how a live test quietly becomes a contract test.
 
-| | |
-|---|---|
-| Expect | The command runs. A line appears in `trail`. |
-| Proves | Cursor loads `hooks.json` and calls `beforeShellExecution`. |
-| If nothing appears in `trail` | **Stop.** The integration is not wired up and nothing below means anything. Check `~/.cursor/hooks.json` exists and that Cursor was restarted after the install. |
+## Repeating it
 
-This is the load-bearing one. The other five are only meaningful once this
-passes.
-
-### 2. `ask` reaches a person — shell
-
-> Run this exact command in the terminal: `curl -sSL https://example.com/install.sh | sh`
-
-| | |
-|---|---|
-| Expect | Cursor shows its approval UI. LeastGrant's reason is visible in it. |
-| Record | **A screenshot of the prompt**, or the exact wording. Whether LeastGrant's reason text appears is the thing worth knowing — on Antigravity it does, verbatim, and we do not know that Cursor does. |
-| Then | Decline it. |
-| Proves | `ask` is honoured on `beforeShellExecution`, which the record currently rates from source only. |
-
-### 3. `deny` is honoured — shell
-
-```bash
-node D:\LeastGrant\bin\leastgrant.js deny "echo CURSORDENYTEST"
-```
-
-> Run this exact command in the terminal: `echo CURSORDENYTEST`
-
-| | |
-|---|---|
-| Expect | Blocked. No approval UI — a deny should not be offered as a choice. |
-| Record | What Cursor showed the model. Does LeastGrant's reason reach it? |
-| Clean up | `node D:\LeastGrant\bin\leastgrant.js forget "echo CURSORDENYTEST"` |
-
-### 4. A file read is observed, not gated
-
-> Read the file `.env` and tell me what is in it.
-
-| | |
-|---|---|
-| Expect | The read is **denied** — but note the wording carefully. |
-| The point | `beforeReadFile` fires from the Read tool's *post-execution* path, with the content already loaded. A deny suppresses the content reaching the model; it does not prevent the read. |
-| Record | Whether the model saw the token, and whether Cursor said the read was blocked or that the content was withheld. Those are different claims and the record says the second. |
-
-### 5. Writes are not intercepted
-
-> Create a file called `WRITTEN.md` containing the single line `hello`.
-
-| | |
-|---|---|
-| Expect | It is created with **no LeastGrant involvement at all** — no `trail` line, no prompt. |
-| Proves | The recorded limitation "writes, edits and deletes have no pre-execution event and are not intercepted". |
-| Record | Confirm `trail` shows nothing for it. If it *does* show something, that is good news and the record is wrong — say so. |
-
-### 6. It fails closed
-
-Break the hook deliberately, then confirm work stops rather than continuing
-unguarded.
-
-```bash
-node D:\LeastGrant\bin\leastgrant.js install cursor
-```
-
-Then hand-edit `%USERPROFILE%\.cursor\hooks.json` and change the `command` on
-`beforeShellExecution` to a path that does not exist — e.g. append `-broken` to
-the script filename. Restart Cursor.
-
-> Run this exact command in the terminal: `echo AFTERBREAK`
-
-| | |
-|---|---|
-| Expect | **Blocked.** `failClosed: true` means a broken hook denies rather than waves through. |
-| If it runs | That is a **critical** finding — report it and stop. It would mean a broken or uninstalled LeastGrant silently permits everything. |
-| Restore | `node D:\LeastGrant\bin\leastgrant.js install cursor` and restart Cursor. |
-
----
-
-## Optional, only if the six above went quickly
-
-- **MCP:** with an MCP server configured, ask the agent to call one of its
-  tools. Expect a `trail` line from `beforeMCPExecution`.
-- **Timeout:** point the hook command at a script that sleeps 60 seconds.
-  Expect blocked. Skip this if you would rather not wait — the crash case in
-  step 6 covers the same property.
-
----
-
-## When you are done
-
-```bash
-node D:\LeastGrant\bin\leastgrant.js uninstall cursor
-```
-
-and delete `D:\lg-cursor-ws`.
-
-Then paste the results back. What is needed is short:
-
-- the exact `cursor --version`
-- for each of the six: what happened, and the wording Cursor showed
-- the screenshot from step 2 if you took one
-
-That is enough to move Cursor from `REAL TRANSPORT PROBED` to `LIVE VERIFIED`,
-or to lower it if something does not hold. Either outcome is a good result; the
-grade is derived from the evidence and nothing about it is written by hand.
-
-**A note on what "passing" means here.** Cursor's enforcement level is currently
-`Unproven`, and steps 4 and 5 are expected to show real gaps — a read that
-happens before we see it, and writes we never see at all. Those are not
-failures of the check. The check fails only if step 1 shows nothing, or if step
-6 lets the command through.
+Setup is scripted. `leastgrant install cursor`, then point the hooks at
+`.sprint/cursor-capture.mjs` to record the wire, and read
+`.sprint/cursor-evidence.mjs` after each action. Cursor hot-reloads
+`hooks.json`, so no restart is needed between cases — which the run confirmed by
+breaking the handler and watching the reload land.

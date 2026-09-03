@@ -223,12 +223,17 @@ describe('a workspace root that contains everything contains nothing', () => {
   test('deciding a root is too wide costs nothing', () => {
     // The width filter is string work, and this guards against someone
     // reintroducing a filesystem probe into it. One briefly lived there and
-    // cost ~21 seconds against an absent Windows device — which is also why
-    // the dead-drive case is recorded as a known limitation rather than
-    // asserted here: probing it is the expensive thing, so the suite must not.
+    // cost ~21 seconds against an absent Windows device, which is also why the
+    // dead-drive case is recorded as a known limitation rather than asserted
+    // here: probing it is the expensive thing, so the suite must not.
+    //
+    // Timed around `usableRoots` itself rather than around a spawned process.
+    // The first version measured a `leastgrant hook` invocation and failed
+    // intermittently under parallel test load — a flaky security test is worse
+    // than no test, because the next person learns to re-run it.
     const started = Date.now();
-    call('run_command', { CommandLine: 'echo hi' }, { roots: ['C:\\', '/', 'C:\\Users'] });
+    const wide = ['C:\\', '/', 'C:\\Users', 'Z:/does-not-exist'];
+    for (let i = 0; i < 200; i++) usableRoots(wide);
     const ms = Date.now() - started;
-    assert.ok(ms < 5000, `took ${ms}ms deciding that three roots were too wide`);
-  });
-});
+    assert.ok(ms < 1000, `200 passes over four roots took ${ms}ms — something is touching the filesystem`);
+  });});
