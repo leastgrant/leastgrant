@@ -54,6 +54,10 @@ describe('cursor: event routing', () => {
       'beforeShellExecution', 'afterShellExecution',
       'beforeMCPExecution', 'afterMCPExecution',
       'beforeReadFile',
+      // The generic gate, added after it was verified firing against 3.18.25.
+      // It is the only reason writes and deletes are gated at all, and the only
+      // way a credential read is refused before the file is opened.
+      'preToolUse',
     ]) {
       assert.equal(isCursorEvent(e), true, e);
     }
@@ -62,7 +66,13 @@ describe('cursor: event routing', () => {
     // (before|after) with three subjects, so it generated an event nobody
     // ships, and this test asserted we recognised it. Cursor drops unknown
     // step names from hooks.json without warning, so nothing would have said so.
-    for (const e of ['afterReadFile', 'PreToolUse', 'PostToolUse', 'sessionStart', 'afterAgentThought', 'afterFileEdit', '']) {
+    // `PreToolUse` is deliberately NOT in this list any more, and its removal
+    // is the interesting part: Cursor's generic gate is spelled `preToolUse`
+    // and Claude Code's is `PreToolUse`, so case-folded they are one string.
+    // The shared switch used to claim it first and answer a Cursor call in
+    // Claude's wire format, which Cursor discards — the hook ran and nothing
+    // was enforced. Routing now keys on `--agent cursor` before that switch.
+    for (const e of ['afterReadFile', 'PostToolUse', 'sessionStart', 'afterAgentThought', 'afterFileEdit', '']) {
       assert.equal(isCursorEvent(e), false, e);
     }
   });

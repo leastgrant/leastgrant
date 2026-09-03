@@ -131,22 +131,37 @@ function fromUriPath(value: string): string {
  * limitation is stated in the README rather than hidden here: on Cursor,
  * ordinary file reads are observed, not gated.
  */
-function render(decision: Decision, reason: string, canAsk: boolean, reasons: string[] = []): string {
-  // An `ask` we cannot ask becomes `allow`, except where letting it through
-  // would be the specific harm the floor exists for. Reading a credential file
-  // is a small, well-defined set and blocking it is recoverable — the user adds
-  // a rule and moves on — whereas silently allowing it is not recoverable at
-  // all. Everything else degrades to `allow`, because turning every unfamiliar
-  // read into a hard block would make the integration unusable.
-  // `guard.self-write` used to be in this list and has been removed, because
-  // it could never fire on the events that reach here. Cursor has no
-  // before-write event at all — no beforeWriteFile, no beforeFileEdit, no
-  // pre-delete — so a write to LeastGrant's own state is not interceptable on
-  // Cursor by any means. Listing it here implied a protection that did not
-  // exist. The read events this does cover cannot write anything.
-  const mustNotPass = reasons.some((r) => r === 'guard.secret-read');
-  const permission =
-    decision === 'ask' && !canAsk ? (mustNotPass ? 'deny' : 'allow') : decision;
+function render(decision: Decision, reason: string, canAsk: boolean, floor = false): string {
+  // What an `ask` becomes on a surface that has no ask.
+  //
+  // Two of Cursor's surfaces can reach a person and two cannot, and the
+  // difference was measured rather than read:
+  //
+  //   beforeShellExecution   `ask` raises the approval card. Real.
+  //   beforeMCPExecution     same.
+  //   beforeReadFile         allow/deny only.
+  //   preToolUse             `ask` is accepted, logged as a VALID response,
+  //                          merged — and the action proceeds with no prompt.
+  //                          A silent allow wearing the word "ask".
+  //
+  // So on the second pair an abstract `ask` has to become something honest.
+  // A floored ask becomes `deny`: a floor is the set LeastGrant says learning
+  // may never unlock, and if the host cannot put a person in front of it then
+  // letting it through is the exact harm the floor exists for. Blocking is
+  // recoverable — the user writes a rule — and a silent allow is not.
+  //
+  // Anything else becomes `allow`, and the record says so in as many words.
+  // Turning every unfamiliar read or write into a hard block would make the
+  // integration unusable, and an unusable permission layer gets uninstalled,
+  // which enforces nothing at all.
+  //
+  // This used to test one guard id by name, `guard.secret-read`, which was
+  // adequate while reads were the only floorable surface here. `preToolUse`
+  // brought Write and Delete, and with them `guard.agent-config`,
+  // `guard.write-outside`, `guard.persistence` and `guard.self-write` — none of
+  // which were on that list. Reading `floor` off the verdict covers whatever
+  // the engine floors next without anyone remembering to come back.
+  const permission = decision === 'ask' && !canAsk ? (floor ? 'deny' : 'allow') : decision;
   const out: Record<string, unknown> = { permission };
   if (decision !== 'allow') {
     out['user_message'] = `LeastGrant: ${reason}`;
@@ -217,6 +232,38 @@ export function runCursorHook(raw: unknown): void {
       toolInput = { file_path: input.file_path };
       canAsk = false;
       break;
+    case 'pretooluse': {
+      // The generic gate, and the reason Cursor is no longer a read-only
+      // integration. Measured against 3.18.25:
+      //
+      //   Write   fires with {file_path, content}; a deny stops the write
+      //   Delete  fires with {file_path}; a deny stops the delete
+      //   Read    fires with {file_path} and NO content, before the file is
+      //           opened — denying here means `beforeReadFile` never fires at
+      //           all and the bytes are never loaded
+      //
+      // That last one narrows a limitation this project published for weeks.
+      // `beforeReadFile` hands the hook the file already loaded, so a deny
+      // there suppresses the content reaching the model without preventing the
+      // read. `preToolUse` prevents the read.
+      //
+      // Scoped by a matcher to Read, Write and Delete. Shell and MCP keep their
+      // specialised hooks, which have a real `ask`; routing them through here
+      // as well would put a silent-allow surface beside a prompting one on the
+      // same call. The matcher was verified to scope: a shell command fires
+      // `beforeShellExecution` and does not fire this.
+      const name = String(input.tool_name ?? '');
+      const args =
+        input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input)
+          ? (input.tool_input as Record<string, unknown>)
+          : {};
+      tool = name;
+      toolInput = args;
+      // Measured: `ask` here is accepted, merged, and the action proceeds with
+      // no prompt.
+      canAsk = false;
+      break;
+    }
     default:
       // Not an event we can say anything about. Logged rather than silent, so
       // "LeastGrant is doing nothing" is discoverable.
@@ -247,7 +294,7 @@ export function runCursorHook(raw: unknown): void {
   });
 
   if (outcome.silent) return;
-  process.stdout.write(render(outcome.decision, outcome.headline, canAsk, outcome.reasons));
+  process.stdout.write(render(outcome.decision, outcome.headline, canAsk, outcome.floor));
 }
 
 /** Is this an event this adapter handles? Used to route without a flag. */
@@ -269,6 +316,7 @@ export function isCursorEvent(name: string): boolean {
  * 3.18.25, filtered to what we actually implement.
  */
 const CURSOR_EVENTS = new Set([
+  'pretooluse',
   'beforeshellexecution',
   'aftershellexecution',
   'beforemcpexecution',

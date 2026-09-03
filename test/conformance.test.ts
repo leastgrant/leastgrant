@@ -149,8 +149,15 @@ const SHAPES: Record<string, { event: string; shell: (cmd: string) => Record<str
       stepIdx: 19,
     }),
   },
-  // Cursor's own event and payload shape: the command sits at the top level,
-  // not under tool_input, and there is no tool_name at all.
+  // Cursor's own event and payload shape: for the shell gate the command sits
+  // at the top level, not under tool_input, and there is no tool_name at all.
+  //
+  // The shell gate is used here rather than the newer generic `preToolUse`
+  // because the suite drives shell commands, and shell is deliberately NOT
+  // routed through the generic gate — that surface silently allows an `ask`,
+  // and shell has a real one. `cursor_version` is included because it is on
+  // every real payload and is what disambiguates Cursor from Claude Code, whose
+  // `PreToolUse` is the same string case-folded.
   cursor: {
     event: 'beforeShellExecution',
     shell: (command) => ({
@@ -158,6 +165,7 @@ const SHAPES: Record<string, { event: string; shell: (cmd: string) => Record<str
       command,
       conversation_id: 'conf',
       generation_id: 'g1',
+      cursor_version: '3.18.25',
       workspace_roots: [WS],
     }),
   },

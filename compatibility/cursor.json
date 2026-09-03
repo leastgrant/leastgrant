@@ -23,12 +23,12 @@
     "deny": {
       "value": "honoured",
       "evidence": "probe",
-      "note": "Observed, and stronger than expected: a deny on a command Cursor would otherwise auto-run without prompting was blocked outright. Cursor showed \"Skipped\", passed LeastGrant’s reason to the model verbatim — \"you set a rule to always block this\" — and the model reported it did not retry or work around the block. No afterShellExecution fired, because nothing ran."
+      "note": "Honoured on every surface, and stronger than the host’s own flow: a deny on a command Cursor would otherwise auto-run without prompting was blocked outright, with LeastGrant’s reason reaching the model verbatim and the model reporting it did not retry. On preToolUse a deny stops a write, a delete, and a read — the read before the file is opened."
     },
     "ask": {
       "value": "partial",
       "evidence": "probe",
-      "note": "It reaches a person on beforeShellExecution — a curl-into-shell returned ask and Cursor raised its approval card with Skip / Always Run / Run, and the user approved it. It is `partial` because beforeReadFile has no ask at all: reads are allow-or-deny, so an unfamiliar read is allowed rather than questioned."
+      "note": "Real on two surfaces and absent on two others, and the difference decides how everything else is mapped. beforeShellExecution and beforeMCPExecution raise the approval card — observed, with Skip / Always Run / Run. beforeReadFile has no ask at all, and preToolUse ACCEPTS one and silently allows the action: Cursor logs it as a valid response, merges it, shows nothing, and the tool runs. So on the file surfaces LeastGrant never emits ask; a floored action is refused and an unfamiliar one is allowed."
     }
   },
   "failure": {
@@ -60,18 +60,19 @@
       "note": "beforeShellExecution fires before the command, and afterShellExecution after it. Round trip measured at 97–105 ms."
     },
     "fileRead": {
-      "value": "observed",
+      "value": "gated",
       "evidence": "probe",
-      "note": "Not a gate, and now measured rather than read. The beforeReadFile payload arrives with a `content` field already holding the file — all 86 bytes of the synthetic credential file, token included. Cursor had read it off disk before consulting the hook. A deny stops the content reaching the model, and the synthetic token appeared in no agent transcript; it does not prevent the read."
+      "note": "Gated, as of the preToolUse layer — this was `observed` and is no longer. preToolUse fires for Read with `{file_path}` and NO content, before the file is opened. Measured: denying a credential read there meant beforeReadFile was never requested at all and the bytes were never loaded. The old route is still registered as a second layer for reads that do not go through the Read tool, and on that route the payload does arrive with the file already loaded."
     },
     "fileWrite": {
-      "value": "none",
+      "value": "gated",
       "evidence": "probe",
-      "note": "Measured: creating a file through Cursor’s edit tool produced ZERO hook invocations and no ledger entry. Not observed after the fact — invisible. Cursor registers no before-write, before-edit or before-delete step."
+      "note": "Gated, as of the preToolUse layer — this was `none` and is no longer. preToolUse fires for Write with `{file_path, content}` and a deny stops the write. Verified live on the file that decides whether LeastGrant runs at all: an edit to <repo>/.cursor/hooks.json was refused and the file was unchanged, with the model reporting it would not work around the block."
     },
     "fileDelete": {
-      "value": "none",
-      "evidence": "source"
+      "value": "gated",
+      "evidence": "probe",
+      "note": "Gated, as of the preToolUse layer. Cursor reports `tool_name: \"Delete\"` with `{file_path}` — the first structured delete any supported agent exposes — and a deny leaves the file in place."
     },
     "mcp": {
       "value": "gated",
@@ -115,23 +116,24 @@
     "askSurvivesNote": "On the two events that support it, an ask beats even the most permissive approval mode."
   },
   "upstreamLimitations": [
-    "File reads are observed after the fact, not gated. The beforeReadFile payload carries the file content, so the read has already happened by the time LeastGrant sees it. A deny stops the content reaching the model.",
-    "Writes, edits and deletes have no pre-execution event and are not intercepted at all. Measured: a file creation produced zero hook invocations.",
-    "beforeReadFile takes allow or deny and has no ask, so an unfamiliar read is allowed rather than questioned. Only a read LeastGrant recognises as a credential is blocked.",
+    "preToolUse accepts `ask` and silently allows the action. Cursor logs the response as valid and merges it, no prompt appears, and the tool runs. Only allow and deny are enforced on that surface, so LeastGrant refuses a floored file action rather than pretending a person was consulted.",
+    "beforeReadFile is post-execution: its payload carries the file content, so a deny there suppresses what reaches the model without preventing the read. It is kept as a second layer behind preToolUse, which does prevent it.",
     "No permission mode reaches the hook, so LeastGrant cannot tell an attended session from an unattended one.",
+    "Cursor has its own sandbox and its own auto-run flow, both acting before the user sees anything. A command may be attempted sandboxed, blocked by that sandbox, and retried unsandboxed, with LeastGrant consulted separately each time.",
     "Cursor also ingests Claude Code hooks from .claude/settings.json and ~/.claude/settings.json, so installing both adapters may double-fire.",
-    "Cursor has its own sandbox and its own auto-run flow, and both act before the user sees anything. A command may be attempted sandboxed, blocked by that sandbox, and retried unsandboxed, with LeastGrant consulted separately each time.",
-    "There is no equivalent of Antigravity’s force_ask: nothing LeastGrant can return compels a prompt that the host’s own settings cannot satisfy."
+    "Cursor’s generic step is spelled `preToolUse` and Claude Code’s is `PreToolUse`. Case-folded they are the same string, so a shared dispatcher will answer one in the other’s wire format unless it routes on the agent first.",
+    "There is no equivalent of Antigravity’s force_ask: nothing LeastGrant can return compels a prompt the host’s own settings cannot satisfy."
   ],
   "leastgrantLimitations": [
-    "MCP was not exercised in the live run — beforeMCPExecution is registered and was never invoked, so its behaviour is contract-derived.",
+    "MCP has never been exercised live. beforeMCPExecution is registered and was never invoked, so its behaviour is contract-derived.",
+    "The generic gate is scoped by matcher to the file tools. Cursor was observed sending Read, Write and Delete; the matcher also covers Edit, MultiEdit, ApplyPatch, StrReplace, SearchReplace, CreateFile, DeleteFile, Move and Rename, which have not been observed and are covered against a rename upstream rather than because they were seen.",
     "Verified on Windows only. The POSIX transport passes the payload on native stdin rather than through PowerShell and has not been exercised.",
     "The hook timeout was not tested; only the crash path was."
   ],
   "verification": {
     "live": {
       "done": true,
-      "what": "Human-assisted run through the real Cursor 3.18.25 IDE on a disposable workspace with a synthetic .env, with a transparent wrapper capturing the wire bytes and Cursor’s own hooks log read alongside. Six cases, all passed. Established: Cursor loads ~/.cursor/hooks.json and registers all five steps (from its own log, \"Loaded 5 user hook(s)\"); an ask raises the approval UI on beforeShellExecution; a deny blocks a command Cursor would otherwise auto-run, reaching the model verbatim; a credential read is denied and the value reaches no transcript, while the payload proves the file was already read; a file write fires no hook at all; and failClosed blocks when the handler cannot run.",
+      "what": "Two human-assisted rounds through the real IDE 3.18.25 on a disposable workspace with a synthetic .env. Round one established that Cursor loads ~/.cursor/hooks.json and registers its steps (from its own log), that an ask raises the approval card on beforeShellExecution, that a deny outranks the host’s auto-run flow and reaches the model verbatim, and that failClosed blocks when the handler cannot run. Round two established the generic preToolUse gate: it is registrable locally and fires; Write arrives with {file_path, content} and a deny stops the write; Delete arrives with {file_path} and a deny stops the delete; Read arrives with {file_path} and NO content, and denying it means beforeReadFile is never requested and the file is never opened; `ask` there is accepted, merged and silently allowed; and the matcher scopes, so a shell command fires only beforeShellExecution. Confirmed end to end with the shipped adapter, including a refused edit to the hooks file that decides whether LeastGrant runs.",
       "version": "3.18.25",
       "os": [
         "win32"
@@ -140,7 +142,7 @@
     },
     "transport": {
       "done": true,
-      "what": "Observed rather than reproduced. Cursor delivers the payload through PowerShell with a UTF-8 BOM — first bytes ef bb bf on every one of the fourteen captured invocations — which is the bug that once had LeastGrant refusing every Cursor tool call. Parsed correctly throughout, 87–105 ms round trip. The payload carries conversation_id, generation_id, model, command or file_path, cwd, sandbox, session_id, cursor_version, workspace_roots, user_email and transcript_path; beforeReadFile adds content and attachments; afterShellExecution adds output and duration.",
+      "what": "Observed rather than reproduced. Cursor delivers the payload through PowerShell with a UTF-8 BOM — first bytes ef bb bf on every captured invocation — which is the bug that once had LeastGrant refusing every Cursor tool call. Parsed correctly throughout, 87–105 ms round trip. preToolUse carries tool_name, tool_input, tool_use_id, conversation_id, generation_id, model, session_id, cursor_version, workspace_roots, user_email and transcript_path; beforeReadFile adds content and attachments; afterShellExecution adds output and duration.",
       "version": "3.18.25",
       "os": [
         "win32"
@@ -166,7 +168,7 @@
       "date": "2026-09-02"
     }
   },
-  "mechanism": "Per-step command hooks in ~/.cursor/hooks.json, on the three before* gates plus two after* events for learning. On Windows the payload is delivered through PowerShell from a temp file rather than on stdin.",
+  "mechanism": "Per-step command hooks in ~/.cursor/hooks.json. Six steps: the generic `preToolUse` scoped by matcher to the file tools, the three specialised gates, and two after* events for learning. On Windows the payload is delivered through PowerShell from a temp file rather than on stdin, prefixed with a UTF-8 BOM.",
   "install": "leastgrant install cursor",
   "controlPaths": [
     {

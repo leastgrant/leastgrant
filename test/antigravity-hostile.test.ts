@@ -60,7 +60,11 @@ function call(
       input: JSON.stringify(body),
       encoding: 'utf8',
       env: { ...process.env, LEASTGRANT_HOME: path.join(HOME, '.leastgrant'), HOME, USERPROFILE: HOME },
-      timeout: 30_000,
+      // Generous on purpose. This file spawns the real binary several times per
+      // test while forty other files are doing the same, and a 30s cap made it
+      // fail under load while passing in 1.3s alone. A security test that goes
+      // red when the machine is busy teaches people to re-run it.
+      timeout: 120_000,
     },
   );
   const out = (r.stdout ?? '').trim();

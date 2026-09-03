@@ -144,6 +144,22 @@ function answeringAntigravity(input: unknown): boolean {
   return typeof o['conversationId'] === 'string' || (!!o['toolCall'] && typeof o['toolCall'] === 'object');
 }
 
+/**
+ * Is this Cursor's payload rather than another agent's?
+ *
+ * Only used as a backstop behind `--agent cursor`. `cursor_version` is the
+ * decisive field — Cursor puts its own version in every hook payload and no
+ * other agent here does.
+ */
+function looksLikeCursor(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false;
+  const o = input as Record<string, unknown>;
+  if (typeof o['cursor_version'] === 'string') return true;
+  // A Cursor payload with the version stripped still has this pair, and Claude
+  // Code has neither.
+  return Array.isArray(o['workspace_roots']) && typeof o['generation_id'] === 'string';
+}
+
 export async function runHook(): Promise<void> {
   let input: HookInput;
   try {
@@ -190,6 +206,24 @@ export async function runHook(): Promise<void> {
         logLine('codex: routed by payload shape, not by --agent codex; re-run `leastgrant install codex`');
       }
       runCodexHook(input);
+      process.exit(0);
+    }
+
+    // Cursor before Claude Code, because they now share an event NAME.
+    //
+    // Cursor's generic gate is called `preToolUse` and Claude Code's is called
+    // `PreToolUse`. Case-folded they are the same string, and the switch below
+    // claimed it first — so a Cursor write arrived at the Claude renderer and
+    // came back in the wrong wire format, which Cursor discards. The gate was
+    // registered, the hook ran, and nothing was enforced.
+    //
+    // Routed on the `--agent cursor` flag the installer writes, with a shape
+    // check behind it for a hand-edited hooks.json that lost the flag. The two
+    // payloads are distinguishable: Cursor carries `cursor_version` and
+    // `workspace_roots`, Claude Code carries `session_id` and `permission_mode`.
+    if (agentFlag() === 'cursor' || looksLikeCursor(input)) {
+      const { runCursorHook } = await import('../cursor/hook.js');
+      runCursorHook(input);
       process.exit(0);
     }
 

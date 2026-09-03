@@ -1072,14 +1072,25 @@ weigh before trusting this:
   secret under an unremarkable flag will pass through into a stored signature. The
   `«redacted»` markers tell you where it caught something; nothing tells you where it
   did not.
-- **The Cursor adapter has never run inside Cursor.** Its Windows transport has been
-  reproduced byte for byte — PowerShell with the payload piped in from a temp file — and
-  LeastGrant driven through it, which is how the UTF-8 BOM bug was found, and it is still
-  not the same thing as Cursor invoking it. Three claims remain unconfirmed: that Cursor
-  loads `~/.cursor/hooks.json`, that it registers the steps LeastGrant asks for, and that
-  an ask raises the approval UI. Cursor has no headless agent mode, so closing that gap
-  needs a human driving a GUI. `beforeReadFile` is also post-execution and has no "ask":
-  a deny stops the content reaching the model, and the file has already been read.
+- **Cursor gates writes, deletes and reads before they happen — and did not until
+  today.** The five specialised hooks LeastGrant installed could not see a write or a
+  delete at all (measured: zero hook invocations for a file creation), and saw a read only
+  through `beforeReadFile`, which fires with the file content already loaded. Cursor also
+  offers a generic `preToolUse` step, registrable from the same `hooks.json`, which fires
+  before the tool runs and carries `{tool_name, tool_input}`. Verified live on 3.18.25:
+  `Write` arrives with `{file_path, content}` and a deny stops the write; `Delete` arrives
+  with `{file_path}` and a deny stops the delete; `Read` arrives with `{file_path}` and NO
+  content, and denying it means `beforeReadFile` is never requested and the file is never
+  opened. Three floors that were structurally unreachable on Cursor — agent-config writes,
+  out-of-project writes, control-file deletes — now enforce.
+- **On Cursor's file surfaces an `ask` is a silent allow, so a floor becomes a refusal.**
+  Measured: `preToolUse` accepts `permission: "ask"`, Cursor logs it as a valid response
+  and merges it, no prompt appears, and the action proceeds. `beforeReadFile` has no `ask`
+  either. So on those two surfaces LeastGrant never emits one: a floored action is refused
+  outright, and an unfamiliar one is allowed and recorded as allowed. It will not claim a
+  human was consulted where the host has no way to consult one. Shell and MCP keep their
+  specialised hooks, which do raise a real prompt, and the generic gate is scoped by a
+  matcher to the file tools so that it cannot shadow them.
 - **Antigravity has now been run live, and doing it corrected this document twice.**
   Driven through the signed-in Desktop 2.11.0 window in a disposable project with a
   synthetic credential file. What it established: `force_ask` on a credential read stopped

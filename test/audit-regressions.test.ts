@@ -224,7 +224,11 @@ describe('trust in one place outside the project does not spread to another', ()
 });
 
 describe('an unrecognised tool is not a harmless one', () => {
-  for (const t of ['delete_file', 'run_in_terminal', 'insert_edit_into_file', 'create_and_run_task']) {
+  // `delete_file` used to be here and has moved, because it is now RECOGNISED
+  // rather than unknown — see the test below. The audit's property is unchanged:
+  // a tool nobody has heard of must not default to the harmless end. Being
+  // recognised as a delete is the cautious end, not the harmless one.
+  for (const t of ['run_in_terminal', 'insert_edit_into_file', 'create_and_run_task']) {
     test(`${t} is not classified as meta`, () => {
       assert.equal(normalizeTool(t), 'unknown', 'the default for an unknown tool must be the cautious end');
     });
@@ -232,9 +236,37 @@ describe('an unrecognised tool is not a harmless one', () => {
 
   test('and it is not auto-approved', () => {
     const env = trainedOn(['git status']);
-    const v = verdict(env, { tool: 'delete_file', input: { path: `${WS}/src/a.ts` } });
+    const v = verdict(env, { tool: 'run_in_terminal', input: { command: 'ls' } });
     assert.notEqual(v.decision, 'allow');
     assert.equal(v.action.understood, false);
+  });
+
+  test('a structured delete is understood as a delete, and still not free', () => {
+    // Cursor's generic `preToolUse` reports `tool_name: "Delete"` with
+    // `{file_path}` — the first structured delete any supported agent exposes.
+    // With no kind for it, it fell to `unknown`, which floors, and EVERY delete
+    // would have been refused. That is not caution, it is an unusable
+    // integration.
+    //
+    // So it is now a real kind, with the capability and irreversibility the
+    // action model has always had for `rm`. Recognised is not the same as
+    // permitted: it carries `fs.delete` and `hard` reversibility, and the
+    // control-file floors reach it.
+    assert.equal(normalizeTool('Delete'), 'delete');
+    assert.equal(normalizeTool('delete_file'), 'delete');
+
+    const env = trainedOn(['git status']);
+    const ordinary = verdict(env, { tool: 'Delete', input: { file_path: `${WS}/src/a.ts` } });
+    assert.equal(ordinary.action.understood, true, 'a delete of a known path is understood');
+    assert.equal(ordinary.action.capability, 'fs.delete');
+    assert.equal(ordinary.action.blast.reversibility, 'hard', 'a deleted file may not be in git');
+    assert.notEqual(ordinary.decision, 'allow', 'a novel delete is not free');
+
+    const control = verdict(env, { tool: 'Delete', input: { file_path: `${WS}/package.json` } });
+    assert.ok(
+      control.flooredGuards.includes('guard.agent-config'),
+      `deleting package.json is floored by [${control.flooredGuards.join(', ') || 'nothing'}]`,
+    );
   });
 
   test('genuinely inert tools are still inert', () => {

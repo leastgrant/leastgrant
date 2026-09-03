@@ -437,6 +437,8 @@ interface CursorHook {
   command: string;
   /** Refuse the tool call if the hook cannot answer. See `cursor()`. */
   failClosed?: boolean;
+  /** Which tool classes a generic step applies to. `preToolUse` only. */
+  matcher?: string;
   [k: string]: unknown;
 }
 
@@ -488,9 +490,57 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
    * reject the *result* of work that already happened, which protects nothing
    * and turns a broken hook into corrupted output.
    */
-  const GATES = new Set(['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']);
+  const GATES = new Set(['preToolUse', 'beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']);
+
+  /**
+   * The generic gate, scoped to the surfaces the specialised hooks cannot cover.
+   *
+   * Without it Cursor was a read-only integration: writes and deletes reached no
+   * hook at all — measured, zero invocations — and reads arrived at
+   * `beforeReadFile` with the file already loaded, so a deny suppressed the
+   * content without preventing the read.
+   *
+   * `preToolUse` fixes both. Verified against 3.18.25: `Write` arrives with
+   * `{file_path, content}` and a deny stops the write; `Delete` arrives with
+   * `{file_path}` and a deny stops the delete; `Read` arrives with `{file_path}`
+   * and NO content, and denying it means `beforeReadFile` never fires — the
+   * bytes are never read.
+   *
+   * The matcher is not decoration. Shell and MCP keep their specialised hooks
+   * because those have a real `ask` that reaches a person, and `preToolUse`'s
+   * `ask` does not — it is accepted, merged, and the action proceeds silently.
+   * Routing Shell through here as well would place a silent-allow surface
+   * beside a prompting one on the same call. Verified to scope: a shell command
+   * fires `beforeShellExecution` and does not fire this.
+   */
+  const MATCHERS: Record<string, string> = {
+    // Wider than the three names Cursor was observed sending, deliberately.
+    //
+    // A live edit produced `Read` and `Write` only — Cursor surfaced its
+    // StrReplace as a `Write` — but the model visibly reached for a second edit
+    // tool by another name when the first was refused. A matcher that misses a
+    // rename does not fail loudly; it silently stops covering a tool class,
+    // which is the failure mode this integration already had for writes.
+    //
+    // Every name here is a file operation. Shell and MCP are deliberately
+    // absent and must stay absent: they have a real `ask` that reaches a
+    // person, and `preToolUse`'s `ask` is a silent allow, so routing them
+    // through here as well would put a silent-allow surface beside a prompting
+    // one on the same call. `test/cursor-pretooluse.test.ts` asserts both
+    // halves of that.
+    // Anchored. Unanchored, `Write` also matches `TodoWrite` — an inert tool
+    // that would be allowed anyway, but every match costs a process spawn on
+    // every todo update. Anchoring is safe whichever way Cursor applies the
+    // pattern: as a substring test it now pins both ends, and as a full match
+    // the anchors are redundant rather than wrong. Verified live after the
+    // change, because a matcher that stops matching is indistinguishable from a
+    // hook that was never installed.
+    preToolUse:
+      '^(Read|Write|Delete|Edit|MultiEdit|ApplyPatch|StrReplace|SearchReplace|CreateFile|DeleteFile|Move|Rename)$',
+  };
 
   for (const event of [
+    'preToolUse',
     'beforeShellExecution',
     'beforeMCPExecution',
     'beforeReadFile',
@@ -501,6 +551,7 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     'afterMCPExecution',
   ]) {
     const entry: CursorHook = GATES.has(event) ? { command, failClosed: true } : { command };
+    if (MATCHERS[event]) entry.matcher = MATCHERS[event];
     const list: CursorHook[] = (hooks[event] ??= []);
     const idx = list.findIndex((h) => isOurs(h.command));
     if (uninstall) {
@@ -523,11 +574,19 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
       // not an upgrade path.
       const want = { ...entry };
       const have = list[idx]!;
+      // A matcher that has drifted is as bad as a missing one: narrowed, it
+      // silently stops covering a tool class; widened, it starts shadowing
+      // Shell. Reconciled like everything else, so an upgrade delivers it.
       const stale =
         have.command !== want.command ||
-        Boolean(have.failClosed) !== Boolean(want.failClosed);
+        Boolean(have.failClosed) !== Boolean(want.failClosed) ||
+        (want.matcher ?? '') !== (have.matcher ?? '');
       if (stale) {
-        list[idx] = { ...have, ...want };
+        // `want` last, and the matcher deleted when we no longer want one, so a
+        // stale matcher cannot survive by merge.
+        const merged: CursorHook = { ...have, ...want };
+        if (!want.matcher) delete merged.matcher;
+        list[idx] = merged;
         changed = true;
       }
     }
@@ -541,7 +600,7 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     changed,
     note: uninstall
       ? undefined
-      : 'Cursor covers shell commands, MCP calls and file reads. Reads are allow-or-block only (Cursor has no "ask" for them), so an unfamiliar read is allowed and a credential read is blocked. Written against the published hook contract and unit-tested, but not yet verified against a live install.',
+      : 'Cursor now covers shell, MCP, reads, writes and deletes. Shell and MCP can raise a real prompt; reads, writes and deletes cannot, so on those a floored action is refused outright and an unfamiliar one is allowed — LeastGrant will not pretend a human was consulted when the host has no way to consult one. The generic preToolUse gate stops a credential read before the file is opened.',
   } as Installed;
 }
 

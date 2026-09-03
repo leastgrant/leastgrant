@@ -920,6 +920,7 @@ export type ToolKind =
   | 'read'
   | 'write'
   | 'edit'
+  | 'delete'
   | 'search'
   | 'net'
   | 'mcp'
@@ -941,6 +942,13 @@ export function normalizeTool(tool: string): ToolKind {
   if (['read', 'readfile', 'view', 'catfile', 'openfile'].includes(t)) return 'read';
   if (['write', 'writefile', 'createfile', 'newfile'].includes(t)) return 'write';
   if (['edit', 'editfile', 'strreplace', 'strreplaceeditor', 'applypatch', 'multiedit', 'notebookedit', 'searchreplace'].includes(t)) return 'edit';
+  // Structured deletes. The action model has had `file.delete` and `fs.delete`
+  // all along — deletes arrived through the shell as `rm` and were understood
+  // there — but no agent had exposed a delete as a structured tool call until
+  // Cursor's generic `preToolUse`, which reports `tool_name: "Delete"` with
+  // `{file_path}`. Without a kind it fell to `unknown`, which floors, and every
+  // delete would have been refused.
+  if (['delete', 'deletefile', 'removefile', 'rmfile', 'deletepath', 'trashfile'].includes(t)) return 'delete';
   if (['glob', 'grep', 'search', 'codebasesearch', 'filesearch', 'ripgrep', 'listdir', 'ls'].includes(t)) return 'search';
   if (['webfetch', 'fetch', 'webseach', 'websearch', 'browser', 'httprequest'].includes(t)) return 'net';
   if (['task', 'agent', 'spawnagent', 'subagent'].includes(t)) return 'spawn';
@@ -983,7 +991,7 @@ function analyzeStructured(
   const input = req.input;
   const filePath = firstString(input, ['file_path', 'path', 'filePath', 'target_file', 'filename', 'notebook_path']);
 
-  if (kind === 'read' || kind === 'edit' || kind === 'write') {
+  if (kind === 'read' || kind === 'edit' || kind === 'write' || kind === 'delete') {
     // `kctx.resolve` never returns an empty string for a non-empty argument —
     // an unplaceable path comes back marked, not missing. That is what makes
     // the `abs ? ... : ...` guards below mean "was a path named at all", which
@@ -1001,21 +1009,29 @@ function analyzeStructured(
           : inside
             ? 'fs.read.workspace'
             : 'fs.read.outside'
-        : inside
-          ? 'fs.write.workspace'
-          : 'fs.write.outside';
+        : kind === 'delete'
+          ? 'fs.delete'
+          : inside
+            ? 'fs.write.workspace'
+            : 'fs.write.outside';
 
     const blast: BlastRadius = {
       reach: inside ? 'workspace' : 'machine',
       // An edit to a tracked file is trivially recoverable; a write outside the
       // project may be overwriting something nobody has a copy of.
-      reversibility: kind === 'read' ? 'trivial' : inside ? 'easy' : 'hard',
+      // A delete is never `easy` to undo, in or out of the project: an edit to
+      // a tracked file is in git, a deleted file may not be.
+      reversibility: kind === 'read' ? 'trivial' : kind === 'delete' ? 'hard' : inside ? 'easy' : 'hard',
       exposure: secret ? 'reads-secrets' : 'none',
       scale: 'single',
     };
 
     return {
-      kind: kind === 'read' ? 'file.read' : kind === 'write' ? 'file.write' : 'file.edit',
+      kind:
+        kind === 'read' ? 'file.read'
+        : kind === 'write' ? 'file.write'
+        : kind === 'delete' ? 'file.delete'
+        : 'file.edit',
       capability,
       signature: toolSignature(req.tool, [filePath ? normalizeArg(filePath, sctx) : '?']),
       display: `${req.tool} ${abs ? displayPath(abs, root) : (filePath ?? '?')}`,
