@@ -311,8 +311,10 @@ The Claude Code hook then emits:
 Two things about that. A hook `deny` is absolute in Claude Code — it beats allow rules and it
 beats `bypassPermissions`. A hook `allow` is not: your own deny and ask rules still override
 it. And any failure of the hook — crash, timeout, exit 1 — is non-blocking, which means the
-tool call proceeds. LeastGrant fails open. It is a decision layer, not a sandbox, and
-`src/adapters/claude-code/hook.ts` says so at the top rather than burying it.
+tool call proceeds — so on this agent LeastGrant fails open. It is a decision layer, not a
+sandbox, and `src/adapters/claude-code/hook.ts` says so at the top rather than burying it.
+That is a property of Claude Code, not of LeastGrant: three of the five shipped agents block
+the call instead, and `failure.onCrash` in `compatibility/` records which.
 
 Nothing above this point was Claude-specific. A second adapter,
 `src/adapters/cursor/hook.ts`, translates Cursor's `beforeShellExecution` /
@@ -953,8 +955,10 @@ does not".
 
 Written down here because a document that only lists strengths is not an audit aid.
 
-- **LeastGrant fails open.** A crashed, timed-out or non-zero-exit hook is non-blocking in
-  Claude Code, and the tool call proceeds. It is a decision layer, not a sandbox.
+- **On Claude Code, a broken hook costs you the protection, not the call.** A crashed,
+  timed-out or non-zero-exit hook is non-blocking there, and the tool call proceeds. Cursor,
+  Copilot and Antigravity refuse the call instead. It is a decision layer either way, not a
+  sandbox.
 
 - **A hook `allow` is not absolute.** Your own deny and ask rules override it. LeastGrant is a
   reliable veto and a best-effort grant, and the product is designed around that asymmetry.

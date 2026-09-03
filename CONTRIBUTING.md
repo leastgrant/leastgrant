@@ -116,8 +116,9 @@ adapter's header comment, the way `hook.ts` does:
 - What happens when the hook crashes, times out, or exits non-zero. Per the contract recorded in
   `hook.ts` (verified against Claude Code v2.1.240), every exit code *other than 2* is a
   non-blocking error and Claude Code **proceeds with the tool call**. Exit 2 is the one code that
-  blocks. LeastGrant fails open: `runHook` catches everything and `emit()` always exits 0. That
-  is stated out loud rather than papered over.
+  blocks. On Claude Code and Codex CLI, LeastGrant therefore fails open: `runHook` catches
+  everything and `emit()` always exits 0. Cursor, Copilot and Antigravity block the call
+  instead — `failure.onCrash` in [`compatibility/`](compatibility/) records which is which.
 - Whether a hook `deny` is absolute, and by which mechanism. This is the claim most easily
   overstated, and it took live probes on all five shipped agents to earn it: every one of them
   now records `verdicts.deny` as `honoured` with `evidence: probe`, Claude Code in its most
