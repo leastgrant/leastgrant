@@ -156,14 +156,14 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       <h2 id="verdicts">What a verdict does here</h2>
       <p>The three verdicts do not travel equally well. This is the table that decides whether
         LeastGrant is a prompt, a veto, or a suggestion on this agent.</p>
-      <table class="matrix">
+      <div class="table-wrap"><table class="matrix">
         <thead><tr><th>verdict</th><th>lands?</th><th>what actually happens</th></tr></thead>
         <tbody>
           <tr><th>allow</th>${graded(a, 'verdicts', 'allow')}<td class="n">${codeSpans(note(a, 'verdicts', 'allow'))}</td></tr>
           <tr><th>ask</th>${graded(a, 'verdicts', 'ask')}<td class="n">${codeSpans(note(a, 'verdicts', 'ask'))}</td></tr>
           <tr><th>deny</th>${graded(a, 'verdicts', 'deny')}<td class="n">${codeSpans(note(a, 'verdicts', 'deny'))}</td></tr>
         </tbody>
-      </table>
+      </table></div>
 
       <h2 id="interactive">Interactive and unattended</h2>
       <p>${
@@ -206,12 +206,12 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
         means LeastGrant is consulted before the thing happens; <em>seen after</em> means it is told
         afterwards and can at best withhold the result; <em>not covered</em> means the action
         happens with LeastGrant never hearing about it.</p>
-      <table class="matrix">
+      <div class="table-wrap"><table class="matrix">
         <thead><tr><th>tool class</th><th>coverage</th><th>detail</th></tr></thead>
         <tbody>
         ${interceptRows}
         </tbody>
-      </table>
+      </table></div>
 
       <h2 id="control">What decides this later</h2>
       <p>The highest-value write on your machine is not any single tool call. It is the file that
@@ -224,12 +224,12 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
         by walking the list rather than reading it, and one of them — Antigravity's
         <code>config.json</code> — holds the host's own &ldquo;Always allow&rdquo; grants, which
         outlive uninstalling LeastGrant entirely.</p>
-      <table class="matrix">
+      <div class="table-wrap"><table class="matrix">
         <thead><tr><th>path</th><th>kind</th><th>what it decides</th></tr></thead>
         <tbody>
         ${controlRows}
         </tbody>
-      </table>
+      </table></div>
 
       <h2 id="verification">What has actually been run</h2>
       <p>Four different things, deliberately not collapsed into one badge. Reproducing an agent's
@@ -315,14 +315,14 @@ export function agentsIndex(facts, entries) {
       <p><strong>Enforcement</strong> is how much of a verdict lands. <strong>Verification</strong>
         is what has been run to establish that. They are separate on purpose: an agent can have the
         best permission semantics here and still have had nothing exercise them.</p>
-      <table class="matrix">
+      <div class="table-wrap"><table class="matrix">
         <thead><tr>
           <th>agent</th><th>enforcement</th><th>verification</th><th>ask</th><th>deny</th><th>tested against</th>
         </tr></thead>
         <tbody>
         ${rows}
         </tbody>
-      </table>
+      </table></div>
 
       <h2 id="caveats">The one thing to know about each</h2>
       <p>Every agent has a sharpest edge. Carrying it here rather than only on the per-agent page is

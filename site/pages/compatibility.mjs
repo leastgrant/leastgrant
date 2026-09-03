@@ -98,7 +98,7 @@ export function compatibility(facts, assessments) {
 <section>
   <div class="shell">
     <div class="table-wrap">
-      <table class="matrix">
+      <div class="table-wrap"><table class="matrix">
         <caption>Generated from <code>compatibility/</code> in the repository. Nothing here is typed by hand.</caption>
         <thead>
           <tr>
@@ -114,7 +114,7 @@ export function compatibility(facts, assessments) {
         <tbody>
 ${rows}
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     <h3>How the evidence is graded</h3>

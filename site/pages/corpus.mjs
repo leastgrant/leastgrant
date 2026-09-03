@@ -49,7 +49,7 @@ export function corpus(facts, data) {
     <h3 id="${attr(cls)}">${esc(cls.replace(/-/g, ' '))}</h3>
     <p>${codeSpans(data.classes[cls] ?? '')}</p>
     <div class="table-wrap">
-      <table class="corpus">
+      <div class="table-wrap"><table class="corpus">
         <thead>
           <tr><th scope="col">input</th><th scope="col">why it is here</th></tr>
         </thead>
@@ -63,7 +63,7 @@ export function corpus(facts, data) {
             )
             .join('')}
         </tbody>
-      </table>
+      </table></div>
     </div>
   </div>
 </section>`,

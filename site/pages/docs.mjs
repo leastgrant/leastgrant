@@ -465,12 +465,12 @@ function installTable() {
     })
     .join('\n        ');
 
-  return `<table class="matrix install">
+  return `<div class="table-wrap"><table class="matrix install">
         <thead><tr><th>agent</th><th>what you type</th><th>enforcement</th><th>verified how</th></tr></thead>
         <tbody>
         ${rows}
         </tbody>
-      </table>
+      </table></div>
       <p>Installing writes into the agent's own configuration file alongside whatever is already
         there. LeastGrant never removes a hook it did not add, and
         <a href="/docs/agents/">the per-agent pages</a> say what each verdict actually does once

@@ -201,6 +201,11 @@ samp {
   font-size: 0.9em;
 }
 
+/*
+ * `pre code` is deliberately excluded from all of this. A code sample scrolls;
+ * a wrapped command line is a different command line, and somebody copying it
+ * would get that one.
+ */
 :not(pre) > code {
   background: var(--raise);
   border: 1px solid var(--line);
@@ -208,7 +213,11 @@ samp {
   padding: 0.1em 0.34em;
   color: var(--bright);
   font-size: 0.85em;
-  word-break: break-word;
+  /* `anywhere` rather than `break-word`: only the former also lowers the
+     min-content width, which is what a grid or flex track measures. An
+     identifier like `mcp__server__tool` was setting the minimum width of the
+     column it sat in even though it was allowed to break. */
+  overflow-wrap: anywhere;
 }
 
 strong {
@@ -220,6 +229,19 @@ hr {
   border: 0;
   border-top: 1px solid var(--line);
   margin: 2.5rem 0;
+}
+
+/*
+ * A word longer than its column breaks rather than pushing the page.
+ *
+ * Only affects text that would otherwise overflow, so ordinary paragraphs are
+ * untouched. Without it a single unbreakable token — a full advisory URL on the
+ * security policy page, a capability path in the verification list — set the
+ * minimum width of the whole document and every viewport narrower than that
+ * token scrolled sideways.
+ */
+body {
+  overflow-wrap: break-word;
 }
 
 /* --- layout --------------------------------------------------------------- */
@@ -415,6 +437,24 @@ section > .shell > .term + h3 {
 @media (max-width: 640px) {
   .top nav .hide-sm {
     display: none;
+  }
+}
+
+/*
+ * At 320px the masthead is the widest thing on every page — logo plus four
+ * links came to 342px against a 320px viewport, so all twenty pages scrolled
+ * by the same 22px. Tightening the nav is enough; hiding a link would cost
+ * navigation on the size that needs it most.
+ */
+@media (max-width: 380px) {
+  .top nav {
+    gap: 0.55rem;
+    font-size: 0.72rem;
+  }
+
+  /* The shell's own inset is part of the same 320px budget. */
+  .shell {
+    padding-inline: 1rem;
   }
 }
 
@@ -882,7 +922,7 @@ th.ta-center {
 
 .gate {
   display: grid;
-  grid-template-columns: 2.2rem 1fr auto;
+  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.8rem;
   padding: 0.75rem 0.9rem;
@@ -1257,7 +1297,11 @@ th.ta-center {
 .steps > li {
   counter-increment: step;
   display: grid;
-  grid-template-columns: 1.8rem 1fr;
+  /* minmax(0, …) for the reason set out at .hero-grid: a bare 1fr is
+     minmax(auto, 1fr), so the widest unbreakable token in the step text became
+     the page's minimum width and the home page scrolled sideways on every phone
+     size. This was the last bare 1fr in the file. */
+  grid-template-columns: 1.8rem minmax(0, 1fr);
   gap: 1rem;
 }
 
@@ -1397,7 +1441,7 @@ th.ta-center {
 
 @media (min-width: 780px) {
   .row {
-    grid-template-columns: 13rem 1fr;
+    grid-template-columns: 13rem minmax(0, 1fr);
     align-items: baseline;
   }
 }

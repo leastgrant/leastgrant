@@ -926,3 +926,50 @@ describe('prose from the records renders as prose', () => {
     assert.ok(out.includes('&amp;') && out.includes('&quot;'), out);
   });
 });
+
+describe('nothing sets the page wider than the viewport', () => {
+  // The browser sweep that found this measured 35 of 120 page-width
+  // combinations scrolling sideways. The causes were a handful of roots — a
+  // bare `1fr` track, tables with no scroll container, unbreakable identifiers,
+  // and a masthead 22px too wide at 320 — but the thing that let them ship was
+  // that no test could see layout at all.
+  //
+  // A static test cannot lay out a page, so it pins the invariants those roots
+  // violated instead. The measurement itself lives in the browser sweep.
+
+  test('every table has a scroll container', () => {
+    const offenders = [];
+    for (const { file, html } of pages) {
+      for (const m of html.matchAll(/<table\b[^>]*>/g)) {
+        const before = html.slice(Math.max(0, m.index - 200), m.index);
+        if (!/<div class="table-wrap">\s*$/.test(before)) offenders.push(`${file}: ${m[0].slice(0, 44)}`);
+      }
+    }
+    assert.deepEqual(offenders, [], 'a table can set the page width:\n  ' + offenders.join('\n  '));
+  });
+
+  test('no grid track is a bare 1fr', () => {
+    // `1fr` is `minmax(auto, 1fr)`, and `auto` is "at least min-content", so one
+    // long token in the track widens the whole page. The stylesheet says this in
+    // a comment at `.hero-grid`; `.steps > li` had it anyway.
+    const css = fs.readFileSync(path.join(SITE, 'assets', 'app.css'), 'utf8');
+    const offenders = [];
+    for (const m of css.matchAll(/grid-template-columns:\s*([^;]+);/g)) {
+      const value = m[1].replace(/\s+/g, ' ').trim();
+      if (/(^|\s)1fr(\s|$)/.test(value) && !value.includes('minmax')) {
+        offenders.push(value.slice(0, 70));
+      }
+    }
+    assert.deepEqual(offenders, [], 'bare 1fr tracks:\n  ' + offenders.join('\n  '));
+  });
+
+  test('long tokens are allowed to break', () => {
+    const css = fs.readFileSync(path.join(SITE, 'assets', 'app.css'), 'utf8');
+    assert.match(css, /body\s*\{[^}]*overflow-wrap:\s*break-word/, 'the page-wide wrap baseline is gone');
+    assert.match(
+      css,
+      /:not\(pre\)\s*>\s*code\s*\{[^}]*overflow-wrap:\s*anywhere/,
+      'inline code no longer lowers its min-content width, so it can widen a grid track',
+    );
+  });
+});
