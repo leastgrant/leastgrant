@@ -467,7 +467,14 @@ integrity floors — still stands in autopilot, and the blast ceiling of
 permissions switched off, and it is strictly more protection than that. It is not the
 posture the rest of this document describes.
 
-### It fails open
+### It fails open on Claude Code and Codex CLI
+
+Everything below is about those two. The other three shipped adapters block the call
+when the hook fails rather than proceeding: Cursor because the installer sets
+`failClosed` on all three gating events, Copilot and Antigravity because their runtimes
+do it by default and were measured doing it. So this section is a limitation of two
+integrations, not of LeastGrant — see `failure.onCrash` in [`compatibility/`](compatibility/)
+for the per-agent record, which is what `leastgrant doctor` reads.
 
 If the hook crashes, times out, or exits with any code other than 2, Claude Code
 records a non-blocking error and **the tool call continues through the normal

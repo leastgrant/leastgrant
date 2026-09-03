@@ -9,11 +9,10 @@ Open a private security advisory on the repository:
 There is no email address for this, on purpose. An address nobody monitors is worse than no
 address at all, and an advisory gets to the same place with a record attached.
 
-> **Before the first release is published:** if that link does not resolve, private vulnerability
-> reporting has not been enabled on the repository yet. In that case open a normal issue saying
-> only that you have a security report and giving no details, and a private channel will be opened
-> from there. A tool whose entire job is to return the right answer cannot have a reporting route
-> that 404s, so this note stays here until the link is confirmed working.
+> **If that link does not resolve for you:** open a normal issue saying only that you have a
+> security report, with no details in it, and a private channel will be opened from there. Do not
+> put the finding in a public issue. A tool whose entire job is to return the right answer cannot
+> have a reporting route that dead-ends, so the fallback stays documented rather than assumed.
 
 Please include:
 
@@ -52,23 +51,31 @@ looks. Concretely, all of these qualify:
   evidence rather than `observed`. Approvals promote; observations mostly do not. Blurring that
   line is a bypass even though no single decision looks wrong.
 
-**A crash is lower severity, but read the next paragraph before you decide it does not matter.**
+**A crash is lower severity, and how much lower depends on which agent you are running.**
 
-When the hook crashes, times out, or exits non-zero, Claude Code treats it as a non-blocking
-error and proceeds with the tool call. LeastGrant fails open. So a crash is a denial of
-protection, not a denial of service — your agent keeps working, it is just unsupervised for that
-call. That is a real problem and we will fix it, but it is bounded and it is loud in
-`~/.leastgrant/leastgrant.log`.
+When the hook crashes, times out, or exits non-zero, what happens next belongs to the host, not to
+LeastGrant. Claude Code and Codex CLI treat it as a non-blocking error and proceed with the tool
+call. Cursor, GitHub Copilot CLI and Google Antigravity block the call instead. The per-agent
+answer is in [`compatibility/`](compatibility/) and `leastgrant doctor` prints it for the agent you
+are actually running; please say which one your report is against, because it changes the severity.
 
-Failing open is precisely why an `allow` bypass is the serious case. Since there is no safe
-fallback state to land in, the only thing standing between a tool call and the machine is the
-engine returning the right answer. A wrong `allow` is not a degraded mode; it is the tool
-actively telling the agent to go ahead.
+On the agents that proceed, a crash is a denial of protection rather than a denial of service —
+your agent keeps working, it is just unsupervised for that call. It is bounded, and it is loud in
+`~/.leastgrant/leastgrant.log`. On the agents that block, the same crash costs you the call
+instead: annoying, occasionally very annoying, but not a hole.
 
-A crash becomes high severity if you can make it happen *selectively* — that is, if the same
-input that crashes the hook is the input you wanted allowed. A parser panic reachable only by the
-command you were trying to sneak through is an `allow` bypass with extra steps, and should be
-reported as one.
+That asymmetry is why an `allow` bypass is the serious case everywhere. Where the host proceeds
+there is no safe fallback state to land in, so the only thing between a tool call and the machine
+is the engine returning the right answer; and where the host blocks, a wrong `allow` is the one
+answer that still gets through. A wrong `allow` is not a degraded mode. It is the tool actively
+telling the agent to go ahead.
+
+A crash becomes high severity if you can make it happen *selectively* — that is, if the same input
+that crashes the hook is the input you wanted allowed. On a fail-open agent, a parser panic
+reachable only by the command you were trying to sneak through is an `allow` bypass with extra
+steps, and should be reported as one. On a fail-closed agent the same trick refuses the call rather
+than permitting it, so report it as a normal bug — unless you can pair it with something that gets
+the call retried without the hook, in which case it is back to being an advisory.
 
 ## What is out of scope
 
