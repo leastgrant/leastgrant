@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { isOurCommand } from './helpers/our-command.js';
 
 const CLI = path.resolve('bin/leastgrant.js');
 const AGENTS = ['claude-code', 'cursor', 'copilot', 'codex'] as const;
@@ -77,7 +78,7 @@ function commands(file: string): string[] {
  * means for the product is covered in `spaced-install-path.test.ts`; here it
  * only has to be recognised.
  */
-const ours = (cmds: string[]) => cmds.filter((c) => /(leastgrant\.js|LEASTG~\d+\.JS)["']?\s+hook/i.test(c));
+const ours = (cmds: string[]) => cmds.filter(isOurCommand);
 
 // ---------------------------------------------------------------------------
 
@@ -161,13 +162,13 @@ describe('install: Cursor is asked to fail closed on the gates', () => {
     };
 
     for (const event of ['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']) {
-      const ours = cfg.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      const ours = cfg.hooks[event]?.find((h) => isOurCommand(h.command));
       assert.ok(ours, `no LeastGrant entry on ${event}`);
       assert.equal(ours.failClosed, true, `${event} would let the call through if the hook broke`);
     }
 
     for (const event of ['afterShellExecution', 'afterMCPExecution']) {
-      const ours = cfg.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      const ours = cfg.hooks[event]?.find((h) => isOurCommand(h.command));
       assert.ok(ours, `no LeastGrant entry on ${event}`);
       assert.notEqual(
         ours.failClosed,
@@ -310,7 +311,7 @@ describe('install: re-running upgrades an entry, not just its path', () => {
       hooks: Record<string, { command: string; failClosed?: boolean }[]>;
     };
     for (const event of ['beforeShellExecution', 'beforeMCPExecution', 'beforeReadFile']) {
-      const ours = after.hooks[event]?.find((h) => h.command.includes('leastgrant'));
+      const ours = after.hooks[event]?.find((h) => isOurCommand(h.command));
       assert.ok(ours, `no entry on ${event}`);
       assert.equal(ours.failClosed, true, `${event} was not upgraded, so it still fails open`);
     }

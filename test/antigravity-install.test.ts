@@ -30,6 +30,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isOurCommand } from './helpers/our-command.js';
 
 function repoRoot(from = import.meta.dirname): string {
   let dir = from;
@@ -70,7 +71,7 @@ function ourHandlers(event: 'PreToolUse' | 'PostToolUse'): { command: string; ti
   const groups = (spec?.[event] as { hooks?: { command?: string; timeout?: number }[] }[] | undefined) ?? [];
   return groups
     .flatMap((g) => g.hooks ?? [])
-    .filter((h) => /leastgrant/i.test(String(h.command ?? '')))
+    .filter((h) => isOurCommand(h.command))
     .map((h) => ({ command: String(h.command), timeout: h.timeout }));
 }
 

@@ -27,6 +27,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { repoRoot } from './helpers/repo-root.js';
+import { isOurCommand } from './helpers/our-command.js';
 
 /** 8.3 short names are a Windows filesystem feature; elsewhere the path is quoted instead. */
 const WINDOWS = process.platform === 'win32';
@@ -82,7 +83,7 @@ function commands(file: string): string[] {
  * platform — and it must not simply reuse the product's own predicate, or a bug
  * in that predicate would agree with itself.
  */
-const ours = (cmds: string[]) => cmds.filter((c) => /(leastgrant\.js|LEASTG~\d+\.JS)["']?\s+hook/i.test(c));
+const ours = (cmds: string[]) => cmds.filter(isOurCommand);
 
 function sandbox(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'lg-spaced-home-'));
