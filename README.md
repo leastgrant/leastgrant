@@ -326,9 +326,13 @@ A short list, because the fastest way to lose a security-minded reader is to ove
 **It is not a sandbox.** It answers a question the agent asks it. It does not confine a process,
 intercept syscalls, or contain anything already running.
 
-**It fails open.** If the hook crashes or times out, Claude Code treats that as a non-blocking error
-and *runs the tool call anyway*. That is the hook contract, not a choice. LeastGrant is a reliable
-veto and a best-effort grant, and it is designed around that asymmetry.
+**What a crash costs you depends on the agent.** If the hook crashes or times out, what happens
+next belongs to the host. Claude Code and Codex CLI treat it as a non-blocking error and *run the
+tool call anyway*, so you lose protection for that call. Cursor, GitHub Copilot CLI and Google
+Antigravity *block the call* instead, so you lose the call. Where the host offers the choice
+LeastGrant takes it — the installer sets `failClosed` on all three of Cursor's gates — and where it
+does not, there is nothing to set. What holds everywhere is the asymmetry underneath: a reliable
+veto and a best-effort grant. Per agent, see the table above or run `leastgrant doctor`.
 
 **Once a command is approved, it has no further say.** Approving `npm test` approves whatever the
 test script does.

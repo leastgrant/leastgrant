@@ -1,4 +1,4 @@
-import { esc, attr } from '../lib/html.mjs';
+import { esc, attr, list } from '../lib/html.mjs';
 import { page } from '../lib/layout.mjs';
 import { verdictBlock, heroSession, firstLine } from '../lib/terminal.mjs';
 
@@ -383,10 +383,10 @@ function honestySection(facts) {
     <p class="eyebrow">what it is not</p>
     <h2>It is not a sandbox</h2>
     <p class="lede">It answers a question the agent asks it. It does not confine a process,
-      intercept syscalls, or contain anything already running. And it fails open: if the hook
-      crashes or times out, the agent runs the tool call anyway. That is the hook contract, not a
-      choice — LeastGrant is a reliable veto and a best-effort grant, and it is designed around
-      that asymmetry.</p>
+      intercept syscalls, or contain anything already running. And if the hook itself crashes or
+      times out, what happens is the host's call, not ours: ${esc(list(facts.failure.open))} run
+      the tool call anyway; ${esc(list(facts.failure.closed))} block it. LeastGrant is a reliable
+      veto and a best-effort grant on all of them, and it is designed around that asymmetry.</p>
 
     <div class="facts">
       <div class="fact">

@@ -156,6 +156,7 @@ export function gather() {
     testFiles,
     measured,
     agents,
+    failure: parseFailureModes(),
     order,
     evidence,
     promotion,
@@ -247,6 +248,52 @@ function parseAgentTable(readme) {
     }
   }
   return agents;
+}
+
+/**
+ * What each host does when the hook itself fails.
+ *
+ * This exists because the site said "it fails open" as a flat property of
+ * LeastGrant, in a callout, in a page description, and on the home page. That
+ * was true when Claude Code was the only agent it ran under. It is now false
+ * for three of the five shipped adapters, and false in the direction that
+ * matters: a Cursor user reading it would expect a crashed hook to let the call
+ * through, when it actually blocks the call.
+ *
+ * Derived rather than written, so it cannot go stale again the way the sentence
+ * it replaced did. `onCrash` is the honest axis to split on — every shipped
+ * record has probe or source evidence for it, whereas Copilot's timeout
+ * behaviour is still `unknown` and must not be rounded up to match its crash
+ * behaviour.
+ */
+function parseFailureModes() {
+  const shipped = loadCompatibility().filter((a) => a.adapter);
+  const open = [];
+  const closed = [];
+  const unknown = [];
+  for (const a of shipped) {
+    const v = a.failure?.onCrash?.value;
+    if (v === 'closed') closed.push(a.name);
+    else if (v === 'open') open.push(a.name);
+    else unknown.push(a.name);
+  }
+  if (unknown.length) {
+    throw new Error(
+      `compatibility/ has no onCrash value for ${unknown.join(', ')}. The website states what ` +
+        `happens when the hook fails, and cannot state it for an agent whose record does not say.`,
+    );
+  }
+  if (!open.length || !closed.length) {
+    throw new Error(
+      `every shipped adapter now fails ${open.length ? 'open' : 'closed'} on crash. The site ` +
+        `copy contrasts the two cases, so it needs rewriting rather than regenerating.`,
+    );
+  }
+  // Only claim a *timeout* fails closed where the record actually says so.
+  const closedOnTimeout = shipped
+    .filter((a) => a.failure?.onTimeout?.value === 'closed')
+    .map((a) => a.name);
+  return { open, closed, closedOnTimeout, total: shipped.length };
 }
 
 function parseOrderTable(readme) {

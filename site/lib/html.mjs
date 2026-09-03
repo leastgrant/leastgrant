@@ -94,6 +94,19 @@ export function cls(...names) {
 }
 
 /**
+ * "A", "A and B", "A, B and C".
+ *
+ * For lists that are generated from the repository but have to read as a
+ * sentence. The alternative — writing the names into the prose — is how the
+ * page came to say every agent fails open long after three of them stopped.
+ */
+export function list(names) {
+  const xs = names.filter(Boolean);
+  if (xs.length <= 1) return xs[0] ?? '';
+  return `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+}
+
+/**
  * An external link.
  *
  * `rel="noopener"` because a page opened with `target="_blank"` can otherwise

@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadCompatibility } from '../../dist/src/core/compatibility.js';
 
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(SITE, 'dist');
@@ -482,8 +483,38 @@ describe('the site does not invent facts', () => {
   test('the security page leads with what it is not', () => {
     const sec = pages.find((p) => p.file === 'security/index.html').html;
     assert.match(sec, /<h1[^>]*>LeastGrant is\s+not a sandbox<\/h1>/);
-    assert.match(sec, /fails open/i);
     assert.match(sec, /security\/advisories\/new/);
+  });
+
+  test('the failure callout names both behaviours, and names them per agent', () => {
+    // This assertion used to be `assert.match(sec, /fails open/i)`, which passed
+    // for two years of a sentence that had become false. "It fails open" was a
+    // property of Claude Code promoted to a property of LeastGrant; three of the
+    // five shipped adapters block the call instead. Pinning the flat phrase made
+    // the page harder to correct than to leave wrong.
+    //
+    // So pin the shape the claim must have — both outcomes, attributed — rather
+    // than any particular wording, and pin it against the same records the page
+    // is generated from.
+    const sec = pages.find((p) => p.file === 'security/index.html').html;
+    const shipped = loadCompatibility().filter((a) => a.adapter);
+    const open = shipped.filter((a) => a.failure?.onCrash?.value === 'open');
+    const closed = shipped.filter((a) => a.failure?.onCrash?.value === 'closed');
+
+    assert.ok(open.length && closed.length, 'the records no longer contain both behaviours');
+    for (const a of [...open, ...closed]) {
+      assert.ok(
+        sec.includes(a.name),
+        `the security page does not say what happens on ${a.name} when the hook fails`,
+      );
+    }
+    assert.match(sec, /run the tool call anyway/i, 'the page does not say what failing open costs');
+    assert.match(sec, /block the call/i, 'the page does not say what failing closed costs');
+    assert.doesNotMatch(
+      sec,
+      /LeastGrant[^.]{0,40}fails open/i,
+      'the page states failing open as a property of LeastGrant rather than of a host',
+    );
   });
 });
 

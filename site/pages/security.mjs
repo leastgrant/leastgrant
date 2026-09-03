@@ -1,4 +1,4 @@
-import { esc, attr } from '../lib/html.mjs';
+import { esc, attr, list } from '../lib/html.mjs';
 import { page } from '../lib/layout.mjs';
 
 /**
@@ -23,12 +23,20 @@ export function security(facts) {
       LeastGrant is not a substitute for one.</p>
 
     <div class="callout" data-tone="deny">
-      <span class="tag">it fails open</span>
-      <p>If the hook crashes, times out, or exits non-zero, Claude Code treats that as a
-        non-blocking error and runs the tool call anyway. That is the hook contract, not a design
-        choice. LeastGrant is a <strong>reliable veto and a best-effort grant</strong>, and the
-        whole thing is built around that asymmetry: a crash costs you protection for one call, not
-        your workflow.</p>
+      <span class="tag">what a crash costs you depends on the agent</span>
+      <p>If the hook crashes, times out, or exits non-zero, what happens next belongs to the host.
+        ${esc(list(facts.failure.open))} treat a failed hook as a non-blocking error and
+        <strong>run the tool call anyway</strong>, so a crash costs you protection for that call.
+        ${esc(list(facts.failure.closed))} <strong>block the call instead</strong>, so a crash
+        costs you the call. Neither is LeastGrant's decision to make: where the host offers the
+        choice it is taken — the installer sets <code>failClosed</code> on every Cursor gate — and
+        where it does not, there is nothing to set.</p>
+      <p>What holds everywhere is the asymmetry underneath: LeastGrant is a
+        <strong>reliable veto and a best-effort grant</strong>. A <code>deny</code> is honoured on
+        every agent here. An <code>allow</code> never overrides your own rules, and on some agents
+        it cannot even be offered.
+        <a href="/docs/agents/">Which agent does which</a> is recorded per agent, and
+        <code>leastgrant doctor</code> prints the answer for the one you are running.</p>
     </div>
   </div>
 </section>
@@ -177,8 +185,9 @@ export function security(facts) {
     path: '/security/',
     title: 'Security',
     description:
-      'LeastGrant is a decision layer, not a sandbox, and it fails open. What it defends ' +
-      'against, what it does not, what is tested, and how to report a bypass privately.',
+      'LeastGrant is a decision layer, not a sandbox. What it defends against, what it does ' +
+      'not, what a failed hook costs you on each agent, what is tested, and how to report a ' +
+      'bypass privately.',
     body,
   });
 }

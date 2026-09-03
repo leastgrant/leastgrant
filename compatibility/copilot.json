@@ -33,7 +33,7 @@
     "onCrash": {
       "value": "closed",
       "evidence": "probe",
-      "note": "The only agent here that fails closed: if the hook errors, Copilot denies the call rather than running it. Discovered the hard way — a broken hook command blocked everything."
+      "note": "If the hook errors, Copilot denies the call rather than running it. Discovered the hard way — a broken hook command blocked everything. This note used to open \"the only agent here that fails closed\", which was true when it was written and stopped being true once Cursor and Antigravity were measured; three of the five shipped adapters now fail closed on crash."
     },
     "onTimeout": {
       "value": "unknown",
