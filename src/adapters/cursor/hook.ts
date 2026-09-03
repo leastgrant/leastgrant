@@ -131,7 +131,40 @@ function fromUriPath(value: string): string {
  * limitation is stated in the README rather than hidden here: on Cursor,
  * ordinary file reads are observed, not gated.
  */
-function render(decision: Decision, reason: string, canAsk: boolean, floor = false): string {
+/**
+ * Reason codes that must never become `allow`, floor or no floor.
+ *
+ * `render` degrades a non-floored ask to `allow` on the surfaces that have no
+ * ask, and that is right for "I have not seen this before". It is wrong for the
+ * verdicts where the engine means something stronger and no guard happened to
+ * fire:
+ *
+ *   gap.blast          "more than LeastGrant will ever approve on its own" —
+ *                      by definition not something to wave through silently.
+ *                      Measured: deleting an in-project source file came back
+ *                      `allow` carrying exactly that sentence.
+ *   session.taint      the session has read a credential and this call spreads
+ *                      it. Not reproducible on Cursor today, because a
+ *                      credential read is refused here and a refused read does
+ *                      not taint — but the code path exists and the next
+ *                      surface may not refuse.
+ *   previously-denied  a human already refused this exact thing. Turning that
+ *                      into a silent allow is the one degradation nobody could
+ *                      defend.
+ *
+ * The Antigravity adapter reached the same list from the same direction. Kept
+ * separate per adapter rather than shared, because which verdicts are safe to
+ * degrade depends on what the host does with the ones that are not.
+ */
+const NEVER_SILENTLY_ALLOWED = new Set(['gap.blast', 'session.taint', 'previously-denied', 'gap.denied']);
+
+function render(
+  decision: Decision,
+  reason: string,
+  canAsk: boolean,
+  floor = false,
+  reasons: string[] = [],
+): string {
   // What an `ask` becomes on a surface that has no ask.
   //
   // Two of Cursor's surfaces can reach a person and two cannot, and the
@@ -161,13 +194,68 @@ function render(decision: Decision, reason: string, canAsk: boolean, floor = fal
   // `guard.write-outside`, `guard.persistence` and `guard.self-write` — none of
   // which were on that list. Reading `floor` off the verdict covers whatever
   // the engine floors next without anyone remembering to come back.
-  const permission = decision === 'ask' && !canAsk ? (floor ? 'deny' : 'allow') : decision;
+  const insist = floor || reasons.some((r) => NEVER_SILENTLY_ALLOWED.has(r));
+  const permission = decision === 'ask' && !canAsk ? (insist ? 'deny' : 'allow') : decision;
   const out: Record<string, unknown> = { permission };
   if (decision !== 'allow') {
+    // A degraded deny is not the same as a rule saying no, and the difference
+    // is actionable: the action needs a person and this surface has no way to
+    // produce one. Saying so points at the surface that does — a terminal
+    // command goes through `beforeShellExecution`, which prompts.
+    const degraded = decision === 'ask' && permission === 'deny';
     out['user_message'] = `LeastGrant: ${reason}`;
-    out['agent_message'] = `LeastGrant ${decision === 'deny' ? 'blocked' : 'paused'} this: ${reason}`;
+    out['agent_message'] = degraded
+      ? `LeastGrant blocked this: ${reason} Cursor cannot prompt for file operations, so an action ` +
+        `that needs a person is refused here rather than allowed silently. Running it in the ` +
+        `terminal will ask instead.`
+      : `LeastGrant ${decision === 'deny' ? 'blocked' : 'paused'} this: ${reason}`;
   }
   return JSON.stringify(out);
+}
+
+/**
+ * Every argument name the engine reads for a file tool.
+ *
+ * A key with one of these names may only reach the engine because this adapter
+ * put it there. Forwarding `tool_input` verbatim let an attacker-shaped
+ * argument object choose which file got judged:
+ *
+ *   {"file_path": ["~/.ssh/id_rsa"], "path": "src/a.ts"}   ->  allow
+ *   {"file_path": ["~/.ssh/id_rsa"]}                       ->  deny
+ *
+ * The engine walks six path-shaped spellings and, until this was fixed, skipped
+ * a `file_path` that was not a usable string and promoted the next one. So one
+ * unrelated key turned a floor into a silent allow, with a reason naming the
+ * wrong file. That hole is closed in `firstString` too — a present-but-unusable
+ * key now stops the chain rather than deferring to the next — and it is closed
+ * again here, because a defence that exists in one place is a defence that
+ * moves when someone refactors the other.
+ *
+ * This is the same discipline the Antigravity adapter arrived at after shipping
+ * the identical bug: the mapping decides what the engine sees.
+ */
+const ENGINE_FILE_KEYS = ['file_path', 'path', 'filePath', 'target_file', 'filename', 'notebook_path'];
+
+/**
+ * Cursor's file-tool arguments, rebuilt rather than forwarded.
+ *
+ * Cursor sends `{file_path}` for Read and Delete and `{file_path, content}` for
+ * Write — observed live on 3.18.25. `file_path` is taken from that key alone,
+ * and any other engine-readable path name is dropped. Everything Cursor may add
+ * later passes through under its own name, because an unrecognised argument is
+ * information and dropping it would quietly narrow the signature.
+ */
+export function fileToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (ENGINE_FILE_KEYS.includes(k)) continue;
+    out[k] = v;
+  }
+  // Preserved verbatim, including a non-string. Replacing it with a placeholder
+  // would make an unreadable call look like a readable one, which is the whole
+  // failure being fixed — the engine has to see that it cannot read this.
+  if ('file_path' in args) out['file_path'] = args['file_path'];
+  return out;
 }
 
 export function runCursorHook(raw: unknown): void {
@@ -258,7 +346,7 @@ export function runCursorHook(raw: unknown): void {
           ? (input.tool_input as Record<string, unknown>)
           : {};
       tool = name;
-      toolInput = args;
+      toolInput = fileToolArgs(args);
       // Measured: `ask` here is accepted, merged, and the action proceeds with
       // no prompt.
       canAsk = false;
@@ -294,7 +382,7 @@ export function runCursorHook(raw: unknown): void {
   });
 
   if (outcome.silent) return;
-  process.stdout.write(render(outcome.decision, outcome.headline, canAsk, outcome.floor));
+  process.stdout.write(render(outcome.decision, outcome.headline, canAsk, outcome.floor, outcome.reasons));
 }
 
 /** Is this an event this adapter handles? Used to route without a flag. */

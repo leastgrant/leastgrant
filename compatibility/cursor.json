@@ -72,7 +72,7 @@
     "fileDelete": {
       "value": "gated",
       "evidence": "probe",
-      "note": "Gated, as of the preToolUse layer. Cursor reports `tool_name: \"Delete\"` with `{file_path}` — the first structured delete any supported agent exposes — and a deny leaves the file in place."
+      "note": "Gated, and refused. Cursor reports tool_name \"Delete\" with {file_path}, and the engine marks every delete gap.blast — more than it will ever approve on its own, meaning a person must decide — exactly as it does for a shell rm. This surface has no way to reach a person, so the faithful translation is a refusal. Agent-initiated deletes therefore do not happen on Cursor through the file tools; a terminal rm goes through beforeShellExecution, which prompts. Before the generic gate they reached no hook at all and simply happened."
     },
     "mcp": {
       "value": "gated",
@@ -122,13 +122,15 @@
     "Cursor has its own sandbox and its own auto-run flow, both acting before the user sees anything. A command may be attempted sandboxed, blocked by that sandbox, and retried unsandboxed, with LeastGrant consulted separately each time.",
     "Cursor also ingests Claude Code hooks from .claude/settings.json and ~/.claude/settings.json, so installing both adapters may double-fire.",
     "Cursor’s generic step is spelled `preToolUse` and Claude Code’s is `PreToolUse`. Case-folded they are the same string, so a shared dispatcher will answer one in the other’s wire format unless it routes on the agent first.",
-    "There is no equivalent of Antigravity’s force_ask: nothing LeastGrant can return compels a prompt the host’s own settings cannot satisfy."
+    "There is no equivalent of Antigravity’s force_ask: nothing LeastGrant can return compels a prompt the host’s own settings cannot satisfy.",
+    "preToolUse has no ask, so any verdict the engine will not auto-approve — gap.blast, a tainted session, a previously refused action — becomes a refusal rather than a prompt. Only allow and deny are enforced there."
   ],
   "leastgrantLimitations": [
     "MCP has never been exercised live. beforeMCPExecution is registered and was never invoked, so its behaviour is contract-derived.",
     "The generic gate is scoped by matcher to the file tools. Cursor was observed sending Read, Write and Delete; the matcher also covers Edit, MultiEdit, ApplyPatch, StrReplace, SearchReplace, CreateFile, DeleteFile, Move and Rename, which have not been observed and are covered against a rename upstream rather than because they were seen.",
     "Verified on Windows only. The POSIX transport passes the payload on native stdin rather than through PowerShell and has not been exercised.",
-    "The hook timeout was not tested; only the crash path was."
+    "The hook timeout was not tested; only the crash path was.",
+    "Agent-initiated deletes through Cursor’s file tools are refused outright, not prompted. The engine says every delete needs a person and this surface cannot produce one, so refusing is the honest translation — but it is stricter than before the generic gate existed, when deletes were invisible. The refusal message points at the terminal, where a prompt does appear."
   ],
   "verification": {
     "live": {

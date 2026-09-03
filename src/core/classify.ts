@@ -1368,10 +1368,33 @@ export function safeString(v: unknown): string {
   return UNRESOLVED;
 }
 
+/**
+ * The first of these keys that names a path — but only if the first one PRESENT
+ * is usable.
+ *
+ * The chain exists because agents disagree about the spelling: `file_path`,
+ * `path`, `target_file`. Skipping absent keys is the point. Skipping a key that
+ * is present and unusable is not, and it was exploitable:
+ *
+ *   {"file_path": ["~/.ssh/id_rsa"], "path": "src/a.ts"}
+ *
+ * The array was skipped, `path` was promoted, and the engine judged `src/a.ts`
+ * — allow, with a reason naming the wrong file — for a call that declared a
+ * credential read. Denying it required only removing the second key, so one
+ * unrelated key turned a floor into a silent allow. An empty string did the
+ * same, because `''` is falsy.
+ *
+ * So the first key that is PRESENT decides, whatever it holds. Present and
+ * usable is the path; present and unusable means the call cannot be read, and
+ * an unreadable call must not borrow an identity from somewhere else in the
+ * object. Absent keys still fall through, so every legitimate spelling keeps
+ * working.
+ */
 function firstString(obj: Record<string, unknown>, keys: string[]): string | undefined {
   for (const k of keys) {
+    if (!(k in obj)) continue;
     const v = obj[k];
-    if (typeof v === 'string' && v) return v;
+    return typeof v === 'string' && v ? v : undefined;
   }
   return undefined;
 }

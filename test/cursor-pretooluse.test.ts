@@ -118,18 +118,35 @@ describe('the generic gate carries the surfaces the specialised hooks cannot', (
     }
   });
 
-  test('an ordinary action is not, or the integration would be unusable', () => {
+  test('an ordinary read or write is not, or the integration would be unusable', () => {
     // The control for the test above, and a real product constraint. Turning
     // every unfamiliar read or write into a hard block would get LeastGrant
     // uninstalled, and an uninstalled permission layer enforces nothing.
     for (const [tool, input] of [
       ['Read', { file_path: path.join(WS, 'src', 'a.ts') }],
       ['Write', { file_path: path.join(WS, 'note.md'), content: 'hi' }],
-      ['Delete', { file_path: path.join(WS, 'note.md') }],
     ] as [string, Record<string, unknown>][]) {
       const r = pre(tool, input);
       assert.notEqual(r.permission, 'deny', `${tool} on an ordinary project file came back deny`);
     }
+  });
+
+  test('a delete is refused here, and that is a deliberate strictness increase', () => {
+    // Deletes are the one file operation this surface will not pass. The engine
+    // marks every delete `gap.blast` — "more than LeastGrant will ever approve
+    // on its own", meaning a person has to decide — and it does the same for a
+    // shell `rm`, with the same `hard` reversibility. On Cursor's file surface
+    // there is no person to decide, so the faithful translation of "a human
+    // must approve this" is a refusal, not a silent allow.
+    //
+    // This IS a behaviour change and a usability cost: before the generic gate,
+    // deletes on Cursor reached no hook at all and simply happened. It is
+    // recorded as a change rather than smoothed over, and the agent_message
+    // points at the surface that can ask — a terminal `rm` goes through
+    // beforeShellExecution, which prompts.
+    const r = pre('Delete', { file_path: path.join(WS, 'note.md') });
+    assert.equal(r.permission, 'deny', 'an ordinary delete should be refused on this surface');
+    assert.match(r.out, /terminal will ask/, 'the refusal does not say what to do instead');
   });
 
   test('an abstract ask is never sent as `ask` on this surface', () => {
@@ -158,20 +175,61 @@ describe('the generic gate carries the surfaces the specialised hooks cannot', (
     // above, where deleting package.json is refused and deleting note.md is not.
   });
 
-  test('the installed matcher covers every file tool and no execution tool', () => {
-    // Read out of the installer rather than restated, so the two cannot drift.
-    // An execution tool appearing here would put a silent-allow surface beside
-    // Shell's real prompt on the same call.
+  /** The matcher as the installer actually writes it. */
+  function installedMatcher(): { pattern: string; names: string[] } {
     const src = fs.readFileSync(path.join(repoRoot(), 'src', 'cli', 'commands', 'install.ts'), 'utf8');
-    const m = src.match(/preToolUse:\s*\n?\s*'([^']+)'/);
-    assert.ok(m, 'could not find the preToolUse matcher in the installer');
-    const re = new RegExp(m[1]!);
+    const at = src.indexOf('preToolUse:');
+    assert.ok(at > 0, 'could not find the preToolUse matcher in the installer');
+    const m = /'([^']+)'\s*\+\s*'([^']+)'/.exec(src.slice(at));
+    assert.ok(m, 'could not parse the matcher literal');
+    const pattern = m[1]! + m[2]!;
+    return { pattern, names: pattern.replace(/^\^\(/, '').replace(/\)\$$/, '').split('|') };
+  }
 
+  test('every name the matcher covers maps to a FILE kind in the engine', () => {
+    // The invariant that would have caught the mistake this test was written
+    // after. `Move` and `Rename` were added to the matcher because they sound
+    // like file operations; both map to `unknown`, which FLOORS — so had
+    // Cursor ever sent one, LeastGrant would have refused it outright.
+    // Registering a gate for a tool the engine cannot classify does not make
+    // it safer, it makes it unusable. Same trap `Delete` fell into, repeated
+    // within the hour of writing the comment warning about it.
+    const { names } = installedMatcher();
+    assert.ok(names.length >= 10, `only ${names.length} names in the matcher`);
+    for (const n of names) {
+      const kind = normalizeTool(n);
+      assert.ok(
+        ['read', 'write', 'edit', 'delete'].includes(kind),
+        `the matcher covers "${n}", which the engine classifies as "${kind}" — give it a file ` +
+          'kind or take it out of the matcher',
+      );
+    }
+  });
+
+  test('the matcher covers both of the tool namespaces in the bundle', () => {
+    // Cursor's bundle carries PascalCase and snake_case names for the same
+    // operations. Only PascalCase was observed live; an anchored matcher that
+    // covers one and not the other is not partially effective, it is absent.
+    const re = new RegExp(installedMatcher().pattern);
     for (const t of ['Read', 'Write', 'Delete', 'Edit', 'MultiEdit', 'ApplyPatch', 'StrReplace', 'DeleteFile']) {
       assert.ok(re.test(t), `the matcher does not cover ${t}`);
     }
-    for (const t of ['Shell', 'MCP', 'Task', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite']) {
-      assert.ok(!re.test(t), `the matcher covers ${t}, which has its own hook or is inert`);
+    for (const t of ['read_file', 'write_file', 'delete_file', 'edit_file', 'search_replace']) {
+      assert.ok(re.test(t), `the matcher does not cover the snake_case name ${t}`);
+    }
+  });
+
+  test('and covers nothing with its own hook, nothing inert, nothing opaque', () => {
+    const re = new RegExp(installedMatcher().pattern);
+    for (const t of [
+      // A real ask of their own; routing them here would weaken them.
+      'Shell', 'shell', 'MCP', 'WriteShellStdin', 'FetchMcpResource', 'ListMcpResources',
+      // Inert, or not a file operation.
+      'TodoWrite', 'Task', 'WebFetch', 'WebSearch', 'ComputerUse', 'RecordScreen',
+      // Sound like file operations and classify as `unknown`, which floors.
+      'Move', 'Rename', 'List', 'ReadLints',
+    ]) {
+      assert.ok(!re.test(t), `the matcher covers ${t}`);
     }
   });
 });

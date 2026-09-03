@@ -528,15 +528,31 @@ function cursor(scope: 'user' | 'project', uninstall: boolean): Installed {
     // through here as well would put a silent-allow surface beside a prompting
     // one on the same call. `test/cursor-pretooluse.test.ts` asserts both
     // halves of that.
-    // Anchored. Unanchored, `Write` also matches `TodoWrite` — an inert tool
-    // that would be allowed anyway, but every match costs a process spawn on
-    // every todo update. Anchoring is safe whichever way Cursor applies the
-    // pattern: as a substring test it now pins both ends, and as a full match
-    // the anchors are redundant rather than wrong. Verified live after the
-    // change, because a matcher that stops matching is indistinguishable from a
-    // hook that was never installed.
+    // Anchored, and every name in it verified to map to a FILE kind in the
+    // engine before being added.
+    //
+    // Two mistakes are baked into this list as scar tissue. The first version
+    // was unanchored, so `Write` also matched `TodoWrite` — inert, allowed
+    // anyway, but a process spawn on every todo update. The second included
+    // `Move` and `Rename` on the reasoning that they sound like file
+    // operations; both map to `unknown`, which FLOORS, so if Cursor ever sent
+    // one LeastGrant would have refused it outright. That is the same
+    // "recognised or refused" trap that `Delete` fell into, added speculatively
+    // an hour after being warned about. They are out until there is both an
+    // engine mapping and an observation.
+    //
+    // Cursor's bundle carries TWO tool namespaces — PascalCase (`Read`,
+    // `Write`, `Delete`) and snake_case (`read_file`, `delete_file`,
+    // `search_replace`) — and an anchored matcher that covers one and not the
+    // other is not partially effective, it is absent. Only PascalCase was
+    // observed live; the snake_case names are covered defensively.
+    //
+    // Shell and MCP stay out. They have a real `ask` that reaches a person and
+    // this surface silently allows one. Anchoring is what keeps
+    // `WriteShellStdin` out despite starting with `Write`.
     preToolUse:
-      '^(Read|Write|Delete|Edit|MultiEdit|ApplyPatch|StrReplace|SearchReplace|CreateFile|DeleteFile|Move|Rename)$',
+      '^(Read|Write|Delete|Edit|MultiEdit|ApplyPatch|StrReplace|SearchReplace|CreateFile|DeleteFile' +
+      '|read_file|write_file|delete_file|edit_file|search_replace)$',
   };
 
   for (const event of [
