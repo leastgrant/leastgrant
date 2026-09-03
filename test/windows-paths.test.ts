@@ -61,6 +61,18 @@ const run = (command: string) =>
 
 const floors = (cmd: string) => run(cmd).flooredGuards.slice().sort();
 
+/**
+ * Whether `C:\...` is an absolute path on the machine running this.
+ *
+ * The tokenizer fix is pure string work and is asserted everywhere. What cannot
+ * be asserted everywhere is what happens AFTER tokenization: on POSIX a
+ * Windows-shaped path is a relative filename, so it resolves inside the
+ * workspace, is not a credential, and floors nothing — correctly, because on
+ * that platform it is not a path to anywhere. Gating those assertions is not a
+ * gap in coverage; asserting them on POSIX would be asserting something false.
+ */
+const WINDOWS = process.platform === 'win32';
+
 /** Backslash spelling, forward-slash spelling of the same command. */
 const PAIRS: [string, string][] = [
   ['cat C:\\Users\\me\\.ssh\\id_rsa', 'cat C:/Users/me/.ssh/id_rsa'],
@@ -95,13 +107,13 @@ describe('a Windows path is a path, not an escape sequence', () => {
     assert.deepEqual(words('cat "C:\\Users\\me\\.env"'), ['cat', 'C:\\Users\\me\\.env']);
   });
 
-  test('each spelling reaches the same floors as its forward-slash twin', () => {
+  test('each spelling reaches the same floors as its forward-slash twin', { skip: !WINDOWS && 'Windows path resolution' }, () => {
     for (const [back, fwd] of PAIRS) {
       assert.deepEqual(floors(back), floors(fwd), `"${back}" and "${fwd}" disagree`);
     }
   });
 
-  test('and those floors are not empty, or the agreement would be vacuous', () => {
+  test('and those floors are not empty, or the agreement would be vacuous', { skip: !WINDOWS && 'Windows path resolution' }, () => {
     // One pair is excluded, and the reason is a separate finding rather than an
     // inconvenience: a credential DIRECTORY is recognised by being under the
     // real home, not by its name, so `grep -r secret C:/Users/me/.ssh` reaches
@@ -118,7 +130,7 @@ describe('a Windows path is a path, not an escape sequence', () => {
     assert.deepEqual(floors(separateFinding), [], 'the excluded pair now floors — remove the exclusion');
   });
 
-  test('ordinary in-project work spelled with backslashes is still free', () => {
+  test('ordinary in-project work spelled with backslashes is still free', { skip: !WINDOWS && 'Windows path resolution' }, () => {
     // The control for everything above. Without it, "they all floor" could mean
     // a rule that floors any command containing a backslash, which would be a
     // different and worse bug.
@@ -128,7 +140,7 @@ describe('a Windows path is a path, not an escape sequence', () => {
     }
   });
 
-  test('a credential read cannot inherit the approvals of ordinary reads', () => {
+  test('a credential read cannot inherit the approvals of ordinary reads', { skip: !WINDOWS && 'Windows path resolution' }, () => {
     // The promotion half. Before the fix both collapsed onto `type <text>`, so
     // twelve approved in-project reads paid for the credential read.
     const secret = run('type C:\\Users\\me\\.ssh\\id_rsa').actions?.[0]?.signature;
@@ -138,7 +150,7 @@ describe('a Windows path is a path, not an escape sequence', () => {
     assert.ok(/secret/.test(String(secret)), `the credential read signs as ${secret}`);
   });
 
-  test('type and more are read as readers when handed a path, and not otherwise', () => {
+  test('type and more are read as readers when handed a path, and not otherwise', { skip: !WINDOWS && 'Windows path resolution' }, () => {
     // Two commands wearing one name each. POSIX `type ls` reports how a name
     // resolves; cmd's `type file` is `cat`. Telling them apart by the argument
     // is the only honest signal, so both halves are asserted.

@@ -45,6 +45,16 @@ function repoRoot(from = import.meta.dirname): string {
 }
 const CLI = path.join(repoRoot(), 'bin', 'leastgrant.js');
 
+/**
+ * Somewhere that is outside the workspace on every platform.
+ *
+ * This was `C:/Users/Public/lg-evil.txt`, which is absolute on Windows and
+ * RELATIVE everywhere else — so on Linux and macOS it resolved inside the
+ * workspace and the "outside the project" assertion tested the opposite of what
+ * it claimed. It passed on the machine it was written on and failed on CI.
+ */
+const OUTSIDE = path.join(os.tmpdir(), 'lg-outside-the-project.txt');
+
 let HOME = '';
 let WS = '';
 before(() => {
@@ -109,7 +119,7 @@ describe('the generic gate carries the surfaces the specialised hooks cannot', (
     const cases: [string, Record<string, unknown>][] = [
       ['Read', { file_path: path.join(WS, '.env') }],
       ['Write', { file_path: path.join(WS, '.cursor', 'hooks.json'), content: '{}' }],
-      ['Write', { file_path: 'C:/Users/Public/lg-evil.txt', content: 'x' }],
+      ['Write', { file_path: OUTSIDE, content: 'x' }],
       ['Delete', { file_path: path.join(WS, 'package.json') }],
     ];
     for (const [tool, input] of cases) {

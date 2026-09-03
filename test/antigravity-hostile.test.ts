@@ -79,6 +79,9 @@ function call(
 
 const SECRET = 'cat ~/.ssh/id_rsa';
 
+/** A plausible workspace root, spelled for the platform running the test. */
+const WSROOT = path.join(os.tmpdir(), 'lg-hostile-root');
+
 describe('a decoy argument cannot shadow the real one', () => {
   // CRITICAL. `translateArgs` wrote renamed and pass-through keys into one
   // object with no collision check, and the model chooses key order. So
@@ -213,8 +216,10 @@ describe('a workspace root that contains everything contains nothing', () => {
   });
 
   test('containment holds through the real binary under every root spelling', () => {
-    const outside = { TargetFile: 'C:/Users/Public/lg-evil.txt', CodeContent: 'x' };
-    for (const roots of [['D:/ws'], ['C:\\'], ['/'], ['C:\\Users'], ['Z:/does-not-exist']]) {
+    // Outside on every platform. A Windows-shaped literal is relative on
+    // POSIX and would land inside the workspace, inverting the assertion.
+    const outside = { TargetFile: path.join(os.tmpdir(), 'lg-outside.txt'), CodeContent: 'x' };
+    for (const roots of [[WSROOT], ['C:\\'], ['/'], ['C:\\Users'], ['/usr']]) {
       const r = call('write_to_file', outside, { roots });
       assert.equal(
         r.decision,
