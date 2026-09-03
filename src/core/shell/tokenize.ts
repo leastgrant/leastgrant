@@ -534,9 +534,9 @@ export function tokenize(src: string, opts: TokenizeOptions = {}): TokenizeResul
  *
  * This parser reads POSIX rules, and on Windows the agents run cmd or
  * PowerShell, where a backslash is an ordinary path character. So
- * `type C:\Users\me\.ssh\id_rsa` de-escaped to `C:Usersme.sshid_rsa`,
- * which `looksLikePath` then rejected — no separator — so the call produced NO
- * path target at all. Every path-keyed floor is keyed on targets, so
+ * a native credential path written with backslashes de-escaped to a token with
+ * no separator left in it, which `looksLikePath` then rejected — so the call
+ * produced NO path target at all. Every path-keyed floor is keyed on targets, so
  * `guard.secret-read`, `guard.write-outside`, `guard.agent-config` and
  * `guard.persistence` went silent together, and the residue signed as the same
  * `type <text>` as any ordinary read. Measured: twelve ordinary in-project

@@ -493,9 +493,10 @@ function render(verdict: AntigravityVerdict, reason: string): string {
  *
  *   A drive or filesystem root — `C:\`, `/`, `C:\Users` — makes everything on
  *   the machine in-project, so `guard.write-outside` never fires and a write to
- *   `C:\Users\Public` signs as the same ordinary `Write(<path>)` as editing a
- *   source file. Approvals of project edits then pay for writes anywhere. Not
- *   model-controlled, but "open a folder at C:\\" is a thing people do.
+ *   a shared system directory signs as the same ordinary `Write(<path>)` as
+ *   editing a source file. Approvals of project edits then pay for writes
+ *   anywhere. Not model-controlled, but opening a folder at a drive root is a
+ *   thing people do.
  *
  * Judged from the string alone — nothing here touches the filesystem.
  *
