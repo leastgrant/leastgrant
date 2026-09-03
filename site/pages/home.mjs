@@ -417,7 +417,7 @@ function honestySection(facts) {
     </div>
 
     <p>The complete version — what it defends against, what it does not, the adversarial model for
-      the learning itself, and what the v${esc(facts.version)} audit left standing — is in the
+      the learning itself, and what the ${esc(facts.auditVersion)} audit left standing — is in the
       <a href="/docs/threat-model/">threat model</a>. The
       <a href="/security/">security page</a> is the short version, including how to report
       something.</p>

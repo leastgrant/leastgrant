@@ -152,6 +152,19 @@ export function gather() {
     repo: 'https://github.com/leastgrant/leastgrant',
     npm: 'https://www.npmjs.com/package/leastgrant',
     advisories: 'https://github.com/leastgrant/leastgrant/security/advisories/new',
+    // Which audit the threat model actually documents.
+    //
+    // Both the home page and the security page said "the v0.5.0 audit",
+    // because they interpolated the CURRENT package version into a sentence
+    // about a specific past event. The threat model has always described the
+    // v0.1.0 audit, so the site was naming an audit that never happened, and
+    // would rename it again on every release. Read from the heading instead.
+    auditVersion: must(
+      threat,
+      /^## \d+\. What the (v\d+\.\d+\.\d+) audit found/m,
+      'a heading naming the audit it reports',
+      'THREAT-MODEL.md',
+    ),
     bypass: { named, symlink, total: named + symlink },
     testFiles,
     measured,

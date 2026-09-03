@@ -313,3 +313,48 @@ describe('the public status label is derived, not written', () => {
 
 const escapeHtml = (s) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+describe('the record describes the matcher that actually ships', () => {
+  test('every tool name the Cursor record advertises is in the installed matcher', () => {
+    // The record said the generic gate "also covers … Move and Rename". It does
+    // not, and not by accident: neither maps to a known tool kind, so gating
+    // them would refuse every move and rename instead of judging it. They were
+    // taken out of the matcher and left in the prose, which is the direction
+    // that publishes a promise the product does not keep.
+    const src = fs.readFileSync(
+      path.join(SITE, '..', 'src', 'cli', 'commands', 'install.ts'),
+      'utf8',
+    );
+    const block = src.match(/preToolUse:\s*((?:\s*'[^']*'\s*\+?)+)/);
+    assert.ok(block, 'the Cursor preToolUse matcher is no longer where this test looks for it');
+    const matcher = [...block[1].matchAll(/'([^']*)'/g)].map((m) => m[1]).join('');
+    const shipped = new Set((matcher.match(/[A-Za-z_]+/g) || []).filter((w) => w.length > 1));
+
+    // The claim lives in the limitations, which is where the matcher is
+    // described to somebody deciding whether their editor is covered.
+    const cursor = loadCompatibility().find((a) => a.id === 'cursor');
+    const note = [...(cursor?.upstreamLimitations ?? []), ...(cursor?.leastgrantLimitations ?? [])].find(
+      (l) => /generic gate is scoped by matcher/.test(l),
+    );
+    assert.ok(note, 'the Cursor record no longer describes the generic matcher');
+
+    // Only the run of names it lists. Reading the whole sentence would sweep up
+    // payload keys such as file_path, which are not tool names and never were.
+    const listed = note.slice(note.indexOf('also covers'));
+    const claimed = [
+      ...new Set((listed.match(/\b(?:[A-Z][a-zA-Z]+|[a-z]+_[a-z_]+)\b/g) || [])),
+    ].filter(
+      (w) =>
+        // Prose, not tool names: product names, the two the matcher deliberately
+        // omits, and words shouted for emphasis (no tool here is all-caps).
+        !['LeastGrant', 'Cursor', 'Move', 'Rename'].includes(w) && w !== w.toUpperCase(),
+    );
+
+    const missing = [...new Set(claimed)].filter((w) => !shipped.has(w));
+    assert.deepEqual(
+      missing,
+      [],
+      `the record advertises tool names the matcher does not contain: ${missing.join(', ')}`,
+    );
+  });
+});

@@ -52,9 +52,30 @@ const FAIL_LABEL = {
   unknown: ['unknown', 'unknown'],
 };
 
-const cell = (table, key) => {
-  const [text, tone] = table[String(key)] ?? table['unknown'];
-  return `<td><span class="cap" data-tone="${attr(tone)}">${esc(text)}</span></td>`;
+/**
+ * One graded cell, carrying how it was established.
+ *
+ * The page says "every claim on this page carries how it was established" and
+ * then rendered 81 bare cells, so the sentence was false and the grading
+ * vocabulary it introduced had nothing to attach to. The marker is the same
+ * shorthand the per-agent pages use.
+ */
+const cell = (table, fact) => {
+  const [text, tone] = table[String(val(fact))] ?? table['unknown'];
+  const how = fact?.evidence;
+  return (
+    `<td><span class="cap" data-tone="${attr(tone)}">${esc(text)}</span>` +
+    (how ? `<span class="ev" title="${attr(EVIDENCE_TITLE[how] ?? how)}">${esc(how)}</span>` : '') +
+    '</td>'
+  );
+};
+
+/** Spelled out on hover, because three of these are easy to read as synonyms. */
+const EVIDENCE_TITLE = {
+  probe: 'someone ran the real agent and watched this happen',
+  source: 'read from the shipped binary or its documentation',
+  inferred: 'derived from something else that was established',
+  unknown: 'not established',
 };
 
 const val = (fact) => String(fact?.value ?? 'unknown');
@@ -67,11 +88,11 @@ export function compatibility(facts, assessments) {
       <th scope="row"><a href="#${attr(agent.id)}">${esc(agent.name)}</a>
         <span class="ver">${esc(agent.versionTested)}</span></th>
       <td><span class="cap" data-tone="${attr(toneForLevel(level))}">${esc(level)}</span></td>
-      ${shipped ? cell(VERDICT_LABEL, val(agent.verdicts.allow)) : emptyCell()}
-      ${shipped ? cell(VERDICT_LABEL, val(agent.verdicts.ask)) : emptyCell()}
-      ${shipped ? cell(VERDICT_LABEL, val(agent.verdicts.deny)) : emptyCell()}
-      ${shipped ? cell(FAIL_LABEL, val(agent.failure.onCrash)) : emptyCell()}
-      ${CLASSES.map(([k]) => (shipped ? cell(REACH_LABEL, val(agent.interception[k])) : emptyCell())).join('')}
+      ${shipped ? cell(VERDICT_LABEL, agent.verdicts.allow) : emptyCell()}
+      ${shipped ? cell(VERDICT_LABEL, agent.verdicts.ask) : emptyCell()}
+      ${shipped ? cell(VERDICT_LABEL, agent.verdicts.deny) : emptyCell()}
+      ${shipped ? cell(FAIL_LABEL, agent.failure.onCrash) : emptyCell()}
+      ${CLASSES.map(([k]) => (shipped ? cell(REACH_LABEL, agent.interception[k]) : emptyCell())).join('')}
     </tr>`;
     })
     .join('\n');
@@ -118,8 +139,8 @@ ${rows}
     </div>
 
     <h3>How the evidence is graded</h3>
-    <p>Every claim on this page carries how it was established, because the grades are not
-      interchangeable and the difference has already mattered here.</p>
+    <p>Every graded cell in the table above carries how it was established, under the label,
+      because the grades are not interchangeable and the difference has already mattered here.</p>
     <ul>
       <li><strong>probed</strong> — someone ran the real agent and watched this happen.</li>
       <li><strong>read</strong> — someone read the shipped binary. Strong evidence about the

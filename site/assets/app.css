@@ -2086,3 +2086,20 @@ dl.grades dd {
     min-width: 0;
   }
 }
+
+/*
+ * The evidence marker beside a capability cell.
+ *
+ * The compatibility page promises that every claim carries how it was
+ * established. It now does, which means 81 more marks on one table — so they
+ * are deliberately quiet: mono, small, --dim, and on their own line under the
+ * label rather than beside it, so the row still scans as a matrix.
+ */
+.cap + .ev {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}

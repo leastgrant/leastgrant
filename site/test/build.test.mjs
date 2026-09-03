@@ -518,10 +518,24 @@ describe('the site does not invent facts', () => {
     const major = pkg.version.split('.')[0];
     const ours = new RegExp(`v${major}\\.\\d+\\.\\d+`, 'g');
 
+    // One other version is allowed anywhere: the one the threat model gives the
+    // audit it reports. The home and security pages both refer to it, and they
+    // used to build that reference out of facts.version — so they said "the
+    // v0.5.0 audit", an audit that never happened, and would have renamed it
+    // again on every release. It is read from THREAT-MODEL.md's own heading
+    // now, which is why naming it here is safe: this test recomputes it from
+    // the same source rather than hardcoding a second copy.
+    const threat = fs.readFileSync(path.join(SITE, '..', 'THREAT-MODEL.md'), 'utf8');
+    const auditVersion = threat.match(/^## \d+\. What the (v\d+\.\d+\.\d+) audit found/m)?.[1];
+    assert.ok(auditVersion, 'THREAT-MODEL.md no longer names the audit it reports');
+
     const stale = [];
     for (const page of pages.filter((p) => !rendered.test(p.file))) {
       for (const found of new Set(page.html.match(ours) ?? [])) {
-        if (found !== `v${pkg.version}`) stale.push(`${page.file}: ${found}`);
+        if (found === `v${pkg.version}`) continue;
+        // Only where it is actually being called an audit.
+        if (found === auditVersion && page.html.includes(`${auditVersion} audit`)) continue;
+        stale.push(`${page.file}: ${found}`);
       }
     }
     assert.deepEqual(stale, [], `stale version strings (current is v${pkg.version})`);

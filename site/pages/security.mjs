@@ -127,7 +127,7 @@ export function security(facts) {
     <p class="lede">A short version. The
       <a href="/docs/threat-model/">threat model</a> is ${esc(String(facts.threatModelSections.length))}
       sections and does not flatter the design; it includes the adversarial model for the learning
-      itself and what the v${esc(facts.version)} audit left standing.</p>
+      itself and what the ${esc(facts.auditVersion)} audit left standing.</p>
     <ul>
       <li><strong>Anything already running.</strong> Once a command is approved, LeastGrant has no
         further say. Approving <code>npm test</code> approves whatever the test script does.</li>

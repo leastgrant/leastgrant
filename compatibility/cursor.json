@@ -127,7 +127,7 @@
   ],
   "leastgrantLimitations": [
     "MCP has never been exercised live. beforeMCPExecution is registered and was never invoked, so its behaviour is contract-derived.",
-    "The generic gate is scoped by matcher to the file tools. Cursor was observed sending Read, Write and Delete; the matcher also covers Edit, MultiEdit, ApplyPatch, StrReplace, SearchReplace, CreateFile, DeleteFile, Move and Rename, which have not been observed and are covered against a rename upstream rather than because they were seen.",
+    "The generic gate is scoped by matcher to the file tools. Cursor was observed sending Read, Write and Delete; the matcher also covers Edit, MultiEdit, ApplyPatch, StrReplace, SearchReplace, CreateFile, DeleteFile and the lower-case spellings read_file, write_file, delete_file, edit_file and search_replace, none of which have been observed and all of which are covered against a rename upstream rather than because they were seen. Move and Rename are deliberately NOT in the matcher: neither maps to a known tool kind, so gating them would refuse every move and rename rather than judge it.",
     "Verified on Windows only. The POSIX transport passes the payload on native stdin rather than through PowerShell and has not been exercised.",
     "The hook timeout was not tested; only the crash path was.",
     "Agent-initiated deletes through Cursor’s file tools are refused outright, not prompted. The engine says every delete needs a person and this surface cannot produce one, so refusing is the honest translation — but it is stricter than before the generic gate existed, when deletes were invisible. The refusal message points at the terminal, where a prompt does appear."

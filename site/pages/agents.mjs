@@ -193,8 +193,14 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
       <ul class="failure-list">
         <li><strong>On crash</strong> — ${esc(val(a, 'failure', 'onCrash') === 'closed' ? 'the call is refused' : val(a, 'failure', 'onCrash') === 'open' ? 'the call runs anyway' : 'not established')}.
           <em>(${esc(evidence(a, 'failure', 'onCrash'))})</em> ${codeSpans(note(a, 'failure', 'onCrash'))}</li>
-        <li><strong>On timeout</strong> — ${esc(val(a, 'failure', 'onTimeout') === 'closed' ? 'the call is refused' : val(a, 'failure', 'onTimeout') === 'open' ? 'the call runs anyway' : 'not established')},
-          after ${esc(String(val(a, 'failure', 'timeoutDefaultSeconds')))}s by default.
+        <li><strong>On timeout</strong> — ${esc(val(a, 'failure', 'onTimeout') === 'closed' ? 'the call is refused' : val(a, 'failure', 'onTimeout') === 'open' ? 'the call runs anyway' : 'not established')}${
+          // Only when there is a number. Copilot and OpenCode record the default
+          // as `unknown`, and the template pluralised it into "after unknowns by
+          // default" — which reads like a measurement and is not one.
+          /^\d+$/.test(String(val(a, 'failure', 'timeoutDefaultSeconds')))
+            ? `, after ${esc(String(val(a, 'failure', 'timeoutDefaultSeconds')))}s by default`
+            : ''
+        }.
           ${codeSpans(note(a, 'failure', 'onTimeout'))}</li>
         <li><strong>Can it be made to fail closed?</strong> —
           ${val(a, 'failure', 'canFailClosed') === 'true' ? 'yes' : 'no'}.
@@ -220,10 +226,10 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
         context. LeastGrant floors an agent write to every path below, so it always reaches a
         person, and <code>test/control-files.test.ts</code> reads this same list and fails the
         build if any of them stops being floored.</p>
-      <p>The list is longer than the install path on purpose. Three of these were found unfloored
-        by walking the list rather than reading it, and one of them — Antigravity's
-        <code>config.json</code> — holds the host's own &ldquo;Always allow&rdquo; grants, which
-        outlive uninstalling LeastGrant entirely.</p>
+      <p>The list is longer than the install path on purpose. Walking it across every agent, rather
+        than reading it, turned up three paths that were not floored at all — and the one that
+        mattered most was Antigravity's <code>config.json</code>, which holds that host's own
+        &ldquo;Always allow&rdquo; grants and outlives uninstalling LeastGrant entirely.</p>
       <div class="table-wrap"><table class="matrix">
         <thead><tr><th>path</th><th>kind</th><th>what it decides</th></tr></thead>
         <tbody>
@@ -258,9 +264,15 @@ export function agentPage(facts, a, assessment, grade, gradeMeaning) {
   return page({
     path: `/docs/agents/${a.id}/`,
     title: `${a.name} — agent support`,
-    description:
-      `How LeastGrant enforces inside ${a.name}: what each verdict does, what it can see, ` +
-      `how it fails, and exactly what has been run to establish that. ${grade}.`,
+    // An agent with no adapter is one LeastGrant does not run inside, so the
+    // description must not open by saying how it enforces there. OpenCode's page
+    // said "How LeastGrant enforces inside OpenCode" while the page itself said
+    // no adapter ships — and a description is the one line search results show.
+    description: a.adapter
+      ? `How LeastGrant enforces inside ${a.name}: what each verdict does, what it can see, ` +
+        `how it fails, and exactly what has been run to establish that. ${grade}.`
+      : `Why LeastGrant ships no adapter for ${a.name}: what the runtime does and does not ` +
+        `mediate, and what would have to change upstream. ${grade}.`,
     body,
   });
 }
@@ -341,9 +353,11 @@ export function agentsIndex(facts, entries) {
 
       <h2 id="grades">What the verification grades mean</h2>
       <p>These are not a ladder of politeness. Each one names a different thing that was done, and
-        the gap between the first two is where a real bug lived: LeastGrant refused every tool call
-        on Cursor for a full release because its Windows transport prefixes a byte-order mark, and
-        nothing short of reproducing that transport would have found it.</p>
+        the distance between reading an agent's contract and reproducing its real transport is
+        where a bug lived: LeastGrant refused every tool call on Cursor for a full release because
+        its Windows transport prefixes a byte-order mark, and nothing short of driving that
+        transport would have found it. Only the grades currently in use are listed below — the
+        list is derived from the records, so a grade nobody holds does not appear.</p>
       <dl class="grades">
         ${entries
           .map(({ grade }) => grade)
