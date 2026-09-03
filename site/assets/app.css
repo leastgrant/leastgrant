@@ -69,6 +69,11 @@
    *   --edge     the visible boundary of something you can click. WCAG 1.4.11
    *              wants 3:1 for that against the page, and a button whose only
    *              affordance is its border has to meet it. 3.28:1.
+   *              Never type. It was being used as the text colour in six rules
+   *              — evidence tags, config-path captions, the "unknown" marker —
+   *              all of them at 0.66-0.72rem, where 3.02:1 is furthest from
+   *              adequate. Small secondary text is --dim, which is the dimmest
+   *              token that still clears 4.5:1 on all three backgrounds.
    *   --dim      text. Every label, caption and eyebrow on this site is small,
    *              so it needs the full 4.5:1 and gets it on all three
    *              backgrounds -- 5.17 on void, 5.03 on pit, 4.76 on raise.
@@ -177,7 +182,7 @@ p {
 a {
   color: var(--bright);
   text-decoration-line: underline;
-  text-decoration-color: var(--dim);
+  text-decoration-color: var(--edge);
   text-decoration-thickness: 1px;
   text-underline-offset: 0.22em;
   transition: text-decoration-color 120ms ease;
@@ -1831,7 +1836,7 @@ footer a:hover {
 }
 
 .cap[data-tone='none'] {
-  color: var(--edge);
+  color: var(--dim);
   border-color: transparent;
 }
 
@@ -1948,7 +1953,7 @@ ul.findings li[data-tone='bad']::before {
   font-size: 0.66rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--edge);
+  color: var(--dim);
   cursor: help;
 }
 
@@ -1973,7 +1978,7 @@ ul.findings li[data-tone='bad']::before {
 
 .matrix td.u,
 .doc-body .u {
-  color: var(--edge);
+  color: var(--dim);
 }
 
 .matrix.install td .sub {
@@ -1981,7 +1986,7 @@ ul.findings li[data-tone='bad']::before {
   margin-top: 0.2rem;
   font-family: var(--mono);
   font-size: 0.68rem;
-  color: var(--edge);
+  color: var(--dim);
   white-space: normal;
 }
 
@@ -2020,14 +2025,14 @@ ul.runs li[data-done='no']::before {
 
 ul.runs li.u::before {
   content: '?';
-  color: var(--edge);
+  color: var(--dim);
 }
 
 ul.runs .where {
   display: block;
   font-family: var(--mono);
   font-size: 0.72rem;
-  color: var(--edge);
+  color: var(--dim);
   margin-top: 0.15rem;
 }
 

@@ -973,3 +973,64 @@ describe('nothing sets the page wider than the viewport', () => {
     );
   });
 });
+
+describe('the palette contract is enforced, not just written down', () => {
+  // app.css documents three greys and says what each is for: --line for
+  // decorative hairlines, --edge for the boundary of something clickable, --dim
+  // for text. --edge was nonetheless the text colour in six rules — evidence
+  // tags, config-path captions, the "unknown" marker — all at 0.66-0.72rem,
+  // where its 3.02:1 is furthest from adequate. The comment was right and
+  // nothing checked it.
+  const CSS = () => fs.readFileSync(path.join(SITE, 'assets', 'app.css'), 'utf8');
+
+  const vars = () => {
+    const out = {};
+    for (const m of CSS().matchAll(/--([a-z-]+):\s*(#[0-9a-fA-F]{3,8})\s*;/g)) out[m[1]] = m[2];
+    return out;
+  };
+
+  const luminance = (hex) => {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = [...h].map((c) => c + c).join('');
+    return [0, 2, 4]
+      .map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  test('every colour used as text clears 4.5:1 against the background it sits on', () => {
+    const v = vars();
+    const backdrops = ['void', 'pit', 'raise'];
+    const offenders = [];
+
+    for (const rule of CSS().matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sel = rule[1].trim().replace(/\s+/g, ' ');
+      if (sel.startsWith('@') || sel.startsWith(':root')) continue;
+      // A rule that sets its own background is judged against that. `.skip` and
+      // `.btn-primary` are dark text on --bright; measuring them against the
+      // page would report 1:1 and invite exactly the wrong fix.
+      const own = rule[2].match(/\bbackground(?:-color)?:\s*var\(--([a-z-]+)\)/);
+      for (const d of rule[2].matchAll(/(?<!-)\bcolor:\s*var\(--([a-z-]+)\)/g)) {
+        const fg = v[d[1]];
+        if (!fg) continue;
+        const against = own && v[own[1]] ? [v[own[1]]] : backdrops.map((b) => v[b]);
+        const worst = Math.min(...against.map((bg) => ratio(fg, bg)));
+        if (worst < 4.5) offenders.push(`${sel} — --${d[1]} at ${worst.toFixed(2)}:1`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], 'text below the contrast floor:\n  ' + offenders.join('\n  '));
+  });
+
+  test('--edge still clears 3:1, because things you can click are outlined in it', () => {
+    const v = vars();
+    for (const bg of ['void', 'pit', 'raise']) {
+      const r = ratio(v.edge, v[bg]);
+      assert.ok(r >= 3, `--edge is ${r.toFixed(2)}:1 on --${bg}, below the 1.4.11 floor for a control boundary`);
+    }
+  });
+});
